@@ -1,0 +1,4 @@
+add_library(can_script_lua INTERFACE)
+target_include_directories(can_script_lua INTERFACE include)
+target_link_libraries(can_script_lua INTERFACE can_script_api)
+

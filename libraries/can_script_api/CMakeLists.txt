@@ -1,0 +1,4 @@
+add_library(can_script_api INTERFACE)
+target_include_directories(can_script_api INTERFACE include)
+target_link_libraries(can_script_api INTERFACE can_core can_decode)
+

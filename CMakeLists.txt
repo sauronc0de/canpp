@@ -58,9 +58,6 @@ pkg_check_modules(LUA REQUIRED lua5.4)
 # Subdirs
 add_subdirectory(externals)
 add_subdirectory(libraries)
+add_subdirectory(apps)
 add_subdirectory(examples)
 add_subdirectory(src)
-
-add_executable(${PROJECT_NAME} src/main.cpp)
-target_include_directories(${PROJECT_NAME} PUBLIC src)
-target_link_libraries(${PROJECT_NAME} PRIVATE log imgui canapp)
