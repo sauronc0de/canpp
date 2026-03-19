@@ -1,5 +1,7 @@
 add_subdirectory(can_core)
 add_subdirectory(can_reader_api)
+add_subdirectory(can_readers_text)
+add_subdirectory(can_readers_binary)
 add_subdirectory(can_dbc)
 add_subdirectory(can_decode)
 add_subdirectory(can_query)

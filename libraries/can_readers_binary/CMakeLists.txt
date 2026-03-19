@@ -1,0 +1,4 @@
+add_library(can_readers_binary STATIC src/binary_trace_reader.cpp)
+target_include_directories(can_readers_binary PUBLIC include)
+target_link_libraries(can_readers_binary PUBLIC can_core can_reader_api)
+

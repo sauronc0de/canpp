@@ -1,4 +1,3 @@
-add_library(can_script_api INTERFACE)
-target_include_directories(can_script_api INTERFACE include)
-target_link_libraries(can_script_api INTERFACE can_core can_decode)
-
+add_library(can_script_api STATIC src/script_engine.cpp)
+target_include_directories(can_script_api PUBLIC include)
+target_link_libraries(can_script_api PUBLIC can_core can_decode)

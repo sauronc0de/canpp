@@ -4,6 +4,7 @@ target_link_libraries(can_app
   PUBLIC
     can_core
     can_reader_api
+    can_readers_text
     can_dbc
     can_decode
     can_query
@@ -17,4 +18,3 @@ target_link_libraries(can_app
 # Temporary compatibility alias while the codebase transitions away from the
 # older target name.
 add_library(canapp ALIAS can_app)
-

@@ -1,0 +1,4 @@
+add_library(can_readers_text STATIC src/text_trace_reader.cpp)
+target_include_directories(can_readers_text PUBLIC include)
+target_link_libraries(can_readers_text PUBLIC can_core can_reader_api)
+

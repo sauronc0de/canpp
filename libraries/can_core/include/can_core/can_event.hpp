@@ -2,23 +2,35 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 
 namespace can_core
 {
 enum class FrameType : std::uint8_t
 {
-  kCan20 = 0,
-  kCanFd = 1,
+  Can20 = 0,
+  CanFd = 1,
 };
 
 struct CanEvent
 {
-  std::uint64_t timestamp_ns = 0;
-  std::uint32_t can_id = 0;
+  std::uint64_t timestampNs = 0;
+  std::uint32_t canId = 0;
   std::uint8_t dlc = 0;
   std::uint8_t channel = 0;
-  FrameType frame_type = FrameType::kCan20;
+  FrameType frameType = FrameType::Can20;
   std::array<std::uint8_t, 64> payload{};
-};
-} // namespace can_core
 
+  [[nodiscard]] bool hasPayload() const
+  {
+    return dlc != 0;
+  }
+
+  [[nodiscard]] std::span<const std::uint8_t> payloadView() const
+  {
+    return std::span<const std::uint8_t>(payload.data(), dlc);
+  }
+};
+
+[[nodiscard]] bool isValidCanId(std::uint32_t canId);
+} // namespace can_core

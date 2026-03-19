@@ -1,4 +1,3 @@
-add_library(can_query INTERFACE)
-target_include_directories(can_query INTERFACE include)
-target_link_libraries(can_query INTERFACE can_core can_decode can_reader_api)
-
+add_library(can_query STATIC src/query_executor.cpp)
+target_include_directories(can_query PUBLIC include)
+target_link_libraries(can_query PUBLIC can_core can_decode can_reader_api)
