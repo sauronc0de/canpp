@@ -41,7 +41,7 @@ can_dbc::Database makeDatabase()
   vehicleStatus.name = "VehicleStatus";
   vehicleStatus.dlc = 8U;
   vehicleStatus.signalDefinitions.push_back(
-    {"VehicleSpeed", 0U, 16U, true, false, 1.0, 0.0, 0.0, 0.0, "km/h", can_dbc::SignalValueType::UnsignedInteger});
+    {"VehicleSpeed", false, std::nullopt, 0U, 16U, true, false, 1.0, 0.0, 0.0, 0.0, "km/h", can_dbc::SignalValueType::UnsignedInteger});
   database.addMessage(vehicleStatus);
 
   can_dbc::MessageDefinition otherStatus;
@@ -49,7 +49,7 @@ can_dbc::Database makeDatabase()
   otherStatus.name = "OtherStatus";
   otherStatus.dlc = 8U;
   otherStatus.signalDefinitions.push_back(
-    {"Counter", 0U, 8U, true, false, 1.0, 0.0, 0.0, 0.0, "", can_dbc::SignalValueType::UnsignedInteger});
+    {"Counter", false, std::nullopt, 0U, 8U, true, false, 1.0, 0.0, 0.0, 0.0, "", can_dbc::SignalValueType::UnsignedInteger});
   database.addMessage(otherStatus);
 
   return database;

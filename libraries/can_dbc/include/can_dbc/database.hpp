@@ -22,6 +22,8 @@ enum class SignalValueType
 struct SignalDefinition
 {
   std::string name;
+  bool isMultiplexer = false;
+  std::optional<std::uint64_t> multiplexValue;
   std::uint16_t startBit = 0;
   std::uint16_t bitLength = 0;
   bool isLittleEndian = true;

@@ -137,7 +137,7 @@ TEST_CASE("qualification decode query export and public-api flow satisfy impleme
 {
   // Requirements:
   // SYS-REQ-007
-  // DBC-REQ-001, DBC-REQ-002, DBC-REQ-003, DBC-REQ-004, DBC-REQ-009
+  // DBC-REQ-001, DBC-REQ-002, DBC-REQ-003, DBC-REQ-004, DBC-REQ-008, DBC-REQ-009
   // QRY-REQ-001, QRY-REQ-002, QRY-REQ-003, QRY-REQ-004, QRY-REQ-005, QRY-REQ-006, QRY-REQ-007, QRY-REQ-008, QRY-REQ-009, QRY-REQ-010, QRY-REQ-011, QRY-REQ-012
   // IO-REQ-030, IO-REQ-031
   const test_support::ScopedTempFile traceFile(
@@ -258,6 +258,54 @@ TEST_CASE("qualification decode query export and public-api flow satisfy impleme
 
   REQUIRE_FALSE(rawFirstSummary.hasError());
   CHECK(rawFirstSummary.matchedEvents == 0U);
+
+  // Real-world DBC compatibility qualification copied from the validated example file:
+  // header keywords, scientific-notation numeric limits, and multiplexed SG syntax shall
+  // not break the public API or CLI decoding path even when the queried raw CAN ID has no
+  // matching DBC message definition.
+  const test_support::ScopedTempFile realLikeAscFile(
+    "qtest_real_like_trace",
+    ".asc",
+    "date Mon Mar 2 10:39:49.909 pm 2026\n"
+    "base hex  timestamps absolute\n"
+    "internal events logged\n"
+    "34.846777 10 12DD54D6x Rx d 8 A0 25 80 01 00 00 00 00 Length = 0 BitCount = 0 ID = 316495062x\n");
+  const test_support::ScopedTempFile realLikeDbcFile(
+    "qtest_real_like_dbc",
+    ".dbc",
+    "VERSION \"copied-real-world-use-cases\"\n"
+    "NS_ :\n"
+    "  NS_DESC_\n"
+    "  SIG_VALTYPE_\n"
+    "  BO_TX_BU_\n"
+    "\n"
+    "BO_ 2621455131 ARC_HUD_Req_FD: 64 ICC_IO_Node\n"
+    " SG_ ARC_HUD_Req_FD_Data : 0|512@1+ (1,0) [0|1.34078079299426E+154] \"\" HUD\n"
+    "\n"
+    "BO_ 967 Motor_26: 8 ICAS1_X_Gateway\n"
+    " SG_ MO_Kuehlerluefter_MUX M : 0|1@1+ (1,0) [0|1] \"\" Vector__XXX\n"
+    " SG_ MO_Kuehlerluefter_1 m0 : 1|7@1+ (1,0) [0|100] \"Unit_PerCent\" Vector__XXX\n"
+    " SG_ MO_Kuehlerluefter_2 m1 : 1|7@1+ (1,0) [0|100] \"Unit_PerCent\" Vector__XXX\n");
+
+  can_app::RunOptions realLikeRunOptions;
+  realLikeRunOptions.tracePath = realLikeAscFile.string();
+  realLikeRunOptions.dbcPath = realLikeDbcFile.string();
+  realLikeRunOptions.canIdFilter = 0x12DD54D6U;
+
+  std::vector<can_app::QueryResultRow> realLikeRows;
+  const can_app::RunSummary realLikeRunSummary = can_app::CanApp().run(
+    realLikeRunOptions,
+    [&realLikeRows](const can_app::QueryResultRow &queryResultRow)
+    {
+      realLikeRows.push_back(queryResultRow);
+    });
+
+  REQUIRE_FALSE(realLikeRunSummary.hasError());
+  CHECK(realLikeRunSummary.scannedEvents == 1U);
+  CHECK(realLikeRunSummary.matchedEvents == 1U);
+  REQUIRE(realLikeRows.size() == 1U);
+  CHECK(realLikeRows.front().canEvent.canId == 0x12DD54D6U);
+  CHECK_FALSE(realLikeRows.front().decodedMessage.has_value());
 }
 
 TEST_CASE("qualification context cache and index flow satisfy implemented retrieval and cache requirements")
@@ -382,7 +430,7 @@ TEST_CASE("qualification pending-or-environmental requirements remain explicitly
   // SYS-REQ-001, SYS-REQ-002, SYS-REQ-003, SYS-REQ-005, SYS-REQ-006
   // DATA-REQ-004
   // IO-REQ-020, IO-REQ-021, IO-REQ-022, IO-REQ-032
-  // DBC-REQ-005, DBC-REQ-006, DBC-REQ-007, DBC-REQ-008
+  // DBC-REQ-005, DBC-REQ-006, DBC-REQ-007
   // PERF-REQ-004, PERF-REQ-005
   // CLI-REQ-005
   // GUI-REQ-001, GUI-REQ-002, GUI-REQ-003, GUI-REQ-004, GUI-REQ-005, GUI-REQ-006, GUI-REQ-007, GUI-REQ-008, GUI-REQ-009, GUI-REQ-010, GUI-REQ-011, GUI-REQ-012, GUI-REQ-013, GUI-REQ-014, GUI-REQ-015, GUI-REQ-016, GUI-REQ-017, GUI-REQ-018, GUI-REQ-019, GUI-REQ-020, GUI-REQ-021

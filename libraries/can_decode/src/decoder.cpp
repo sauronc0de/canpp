@@ -3,6 +3,7 @@
 #include <bit>
 #include <cstring>
 #include <limits>
+#include <optional>
 
 namespace can_decode
 {
@@ -106,6 +107,21 @@ DecodedSignalValue convertValue(std::uint64_t rawValue, const can_dbc::SignalDef
   const double scaledValue = static_cast<double>(rawValue) * signalDefinition.scale + signalDefinition.offset;
   return scaledValue;
 }
+
+std::optional<std::uint64_t> resolveMultiplexerValue(
+  const can_core::CanEvent &canEvent,
+  const can_dbc::MessageDefinition &messageDefinition)
+{
+  for(const can_dbc::SignalDefinition &signalDefinition : messageDefinition.signalDefinitions)
+  {
+    if(signalDefinition.isMultiplexer)
+    {
+      return extractRawValue(canEvent, signalDefinition);
+    }
+  }
+
+  return std::nullopt;
+}
 } // namespace
 
 Decoder::Decoder(const can_dbc::Database *database)
@@ -145,9 +161,18 @@ DecodeResult Decoder::decode(const can_core::CanEvent &canEvent) const
   decodeResult.decodedMessage.messageName = messageDefinition->name;
   decodeResult.decodedMessage.canId = messageDefinition->canId;
   decodeResult.decodedMessage.signals.reserve(messageDefinition->signalDefinitions.size());
+  const std::optional<std::uint64_t> multiplexerValue = resolveMultiplexerValue(canEvent, *messageDefinition);
 
   for(const can_dbc::SignalDefinition &signalDefinition : messageDefinition->signalDefinitions)
   {
+    if(signalDefinition.multiplexValue.has_value())
+    {
+      if(!multiplexerValue.has_value() || *multiplexerValue != *signalDefinition.multiplexValue)
+      {
+        continue;
+      }
+    }
+
     DecodedSignal decodedSignal;
     decodedSignal.name = signalDefinition.name;
     decodedSignal.unit = signalDefinition.unit;

@@ -15,19 +15,20 @@ constexpr int kMessageCanIdIndex = 1;
 constexpr int kMessageNameIndex = 2;
 constexpr int kMessageDlcIndex = 3;
 constexpr int kSignalNameIndex = 1;
-constexpr int kSignalStartBitIndex = 2;
-constexpr int kSignalBitLengthIndex = 3;
-constexpr int kSignalEndianIndex = 4;
-constexpr int kSignalSignedIndex = 5;
-constexpr int kSignalScaleIndex = 6;
-constexpr int kSignalOffsetIndex = 7;
-constexpr int kSignalMinimumIndex = 8;
-constexpr int kSignalMaximumIndex = 9;
-constexpr int kSignalUnitIndex = 10;
+constexpr int kSignalMultiplexIndex = 2;
+constexpr int kSignalStartBitIndex = 3;
+constexpr int kSignalBitLengthIndex = 4;
+constexpr int kSignalEndianIndex = 5;
+constexpr int kSignalSignedIndex = 6;
+constexpr int kSignalScaleIndex = 7;
+constexpr int kSignalOffsetIndex = 8;
+constexpr int kSignalMinimumIndex = 9;
+constexpr int kSignalMaximumIndex = 10;
+constexpr int kSignalUnitIndex = 11;
 
 const std::regex kMessageRegex(R"(^BO_\s+(\d+)\s+([A-Za-z0-9_]+)\s*:\s*(\d+)\s+.*$)");
 const std::regex kSignalRegex(
-  R"dbc(^SG_\s+([A-Za-z0-9_]+)\s*:\s*(\d+)\|(\d+)@([01])([+-])\s+\(([+-]?[0-9]*\.?[0-9]+),([+-]?[0-9]*\.?[0-9]+)\)\s+\[([+-]?[0-9]*\.?[0-9]+)\|([+-]?[0-9]*\.?[0-9]+)\]\s+"([^"]*)".*$)dbc");
+  R"dbc(^SG_\s+([A-Za-z0-9_]+)(?:\s+([Mm](?:\d+)?))?\s*:\s*(\d+)\|(\d+)@([01])([+-])\s+\(([+-]?[0-9]*\.?[0-9]+(?:[Ee][+-]?[0-9]+)?),([+-]?[0-9]*\.?[0-9]+(?:[Ee][+-]?[0-9]+)?)\)\s+\[([+-]?[0-9]*\.?[0-9]+(?:[Ee][+-]?[0-9]+)?)\|([+-]?[0-9]*\.?[0-9]+(?:[Ee][+-]?[0-9]+)?)\]\s+"([^"]*)".*$)dbc");
 
 std::optional<MessageDefinition> parseMessageDefinition(const std::string &line)
 {
@@ -54,6 +55,19 @@ std::optional<SignalDefinition> parseSignalDefinition(const std::string &line)
 
   SignalDefinition signalDefinition;
   signalDefinition.name = match[kSignalNameIndex].str();
+  const std::string multiplexToken = match[kSignalMultiplexIndex].str();
+  if(!multiplexToken.empty())
+  {
+    if(multiplexToken == "M")
+    {
+      signalDefinition.isMultiplexer = true;
+    }
+    else if(multiplexToken.front() == 'm')
+    {
+      signalDefinition.multiplexValue = std::stoull(multiplexToken.substr(1U));
+    }
+  }
+
   signalDefinition.startBit = static_cast<std::uint16_t>(std::stoul(match[kSignalStartBitIndex].str()));
   signalDefinition.bitLength = static_cast<std::uint16_t>(std::stoul(match[kSignalBitLengthIndex].str()));
   signalDefinition.isLittleEndian = match[kSignalEndianIndex].str() == "1";
@@ -153,7 +167,7 @@ LoadResult DbcLoader::loadFromText(std::string_view dbcText) const
       continue;
     }
 
-    if(trimmedLine.rfind("BO_", 0) == 0)
+    if(trimmedLine.rfind("BO_ ", 0) == 0)
     {
       const auto messageDefinition = parseMessageDefinition(trimmedLine);
       if(!messageDefinition.has_value())
@@ -170,7 +184,7 @@ LoadResult DbcLoader::loadFromText(std::string_view dbcText) const
       continue;
     }
 
-    if(trimmedLine.rfind("SG_", 0) == 0)
+    if(trimmedLine.rfind("SG_ ", 0) == 0)
     {
       if(currentMessageDefinition == nullptr)
       {

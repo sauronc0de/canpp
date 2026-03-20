@@ -151,7 +151,7 @@ can_reader_api::SourceDescriptor makeSourceDescriptor(const RunOptions &runOptio
 can_core::QuerySpec makeQuerySpec(const RunOptions &runOptions)
 {
   can_core::QuerySpec querySpec;
-  querySpec.shouldDecode = runOptions.shouldDecodeMatches || runOptions.dbcPath.has_value();
+  querySpec.shouldDecode = runOptions.shouldDecodeMatches;
   querySpec.shouldReturnRaw = true;
 
   if(runOptions.canIdFilter.has_value())
@@ -209,7 +209,7 @@ RunSummary CanApp::run(const RunOptions &runOptions, const QueryResultCallback &
   const can_query::CompiledQuery compiledQuery = queryPlanner.compile(makeQuerySpec(runOptions));
 
   can_query::QueryExecutionOptions queryExecutionOptions;
-  queryExecutionOptions.shouldDecodeMatches = runOptions.shouldDecodeMatches || runOptions.dbcPath.has_value();
+  queryExecutionOptions.shouldDecodeMatches = runOptions.shouldDecodeMatches;
 
   ExportingResultSink callbackResultSink(queryResultCallback, runOptions.exportRequest);
   can_query::QueryExecutor queryExecutor(&decoder);

@@ -118,3 +118,50 @@ TEST_CASE("can_app reports unsupported formats at the application boundary")
   CHECK(runSummary.errorInfo.code == can_core::ErrorCode::UnsupportedFormat);
   CHECK(rows.empty());
 }
+
+TEST_CASE("can_app accepts a real-world-style DBC with header keywords scientific notation and multiplexed signals")
+{
+  const test_support::ScopedTempFile traceFile(
+    "app_real_like_trace",
+    ".asc",
+    "date Mon Mar 2 10:39:49.909 pm 2026\n"
+    "base hex  timestamps absolute\n"
+    "internal events logged\n"
+    "34.846777 10 12DD54D6x Rx d 8 A0 25 80 01 00 00 00 00 Length = 0 BitCount = 0 ID = 316495062x\n");
+  const test_support::ScopedTempFile dbcFile(
+    "app_real_like",
+    ".dbc",
+    "VERSION \"copied-real-world-use-cases\"\n"
+    "NS_ :\n"
+    "  NS_DESC_\n"
+    "  SIG_VALTYPE_\n"
+    "  BO_TX_BU_\n"
+    "\n"
+    "BO_ 2621455131 ARC_HUD_Req_FD: 64 ICC_IO_Node\n"
+    " SG_ ARC_HUD_Req_FD_Data : 0|512@1+ (1,0) [0|1.34078079299426E+154] \"\" HUD\n"
+    "\n"
+    "BO_ 967 Motor_26: 8 ICAS1_X_Gateway\n"
+    " SG_ MO_Kuehlerluefter_MUX M : 0|1@1+ (1,0) [0|1] \"\" Vector__XXX\n"
+    " SG_ MO_Kuehlerluefter_1 m0 : 1|7@1+ (1,0) [0|100] \"Unit_PerCent\" Vector__XXX\n"
+    " SG_ MO_Kuehlerluefter_2 m1 : 1|7@1+ (1,0) [0|100] \"Unit_PerCent\" Vector__XXX\n");
+
+  can_app::RunOptions runOptions;
+  runOptions.tracePath = traceFile.string();
+  runOptions.dbcPath = dbcFile.string();
+  runOptions.canIdFilter = 0x12DD54D6U;
+
+  std::vector<can_app::QueryResultRow> rows;
+  const can_app::RunSummary runSummary = can_app::CanApp().run(
+    runOptions,
+    [&rows](const can_app::QueryResultRow &queryResultRow)
+    {
+      rows.push_back(queryResultRow);
+    });
+
+  REQUIRE_FALSE(runSummary.hasError());
+  CHECK(runSummary.scannedEvents == 1U);
+  CHECK(runSummary.matchedEvents == 1U);
+  REQUIRE(rows.size() == 1U);
+  CHECK(rows.front().canEvent.canId == 0x12DD54D6U);
+  CHECK_FALSE(rows.front().decodedMessage.has_value());
+}
