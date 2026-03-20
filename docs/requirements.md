@@ -60,7 +60,7 @@ The system shall consist of:
 
 - IO-REQ-010: The system shall support reading candump/log format files.
 - IO-REQ-011: The system shall support reading CSV-based CAN trace files.
-- IO-REQ-012: The system shall support reading ASC format files.
+- IO-REQ-012: The system shall support reading ASC format files, including supported CAN/CAN FD records contained in mixed-bus captures, while ignoring unsupported non-CAN records.
 
 ### Extended Formats
 

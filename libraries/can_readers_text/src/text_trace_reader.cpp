@@ -57,6 +57,35 @@ std::vector<std::string> split(std::string_view line, char separator)
   return tokens;
 }
 
+std::vector<std::string> splitWhitespace(std::string_view line)
+{
+  std::vector<std::string> tokens;
+  std::istringstream stream{std::string(line)};
+  std::string token;
+  while(stream >> token)
+  {
+    tokens.push_back(token);
+  }
+
+  return tokens;
+}
+
+std::string stripExtendedCanSuffix(std::string_view value)
+{
+  const std::string trimmedValue = trim(value);
+  if(trimmedValue.empty())
+  {
+    return {};
+  }
+
+  if(trimmedValue.back() == 'x' || trimmedValue.back() == 'X')
+  {
+    return trimmedValue.substr(0, trimmedValue.size() - 1U);
+  }
+
+  return trimmedValue;
+}
+
 bool parseUnsigned64(std::string_view text, std::uint64_t &value)
 {
   const std::string trimmedText = trim(text);
@@ -405,8 +434,8 @@ bool AscTraceReader::canParseExtension(std::string_view extension) const
 
 bool AscTraceReader::parseLine(const std::string &line, ParsedTextRecord &parsedTextRecord) const
 {
-  const std::vector<std::string> tokens = split(line, ' ');
-  if(tokens.size() < 6U)
+  const std::vector<std::string> tokens = splitWhitespace(line);
+  if(tokens.size() < 7U)
   {
     return false;
   }
@@ -418,8 +447,36 @@ bool AscTraceReader::parseLine(const std::string &line, ParsedTextRecord &parsed
 
   std::uint64_t channelValue = 0;
   std::uint64_t dlcValue = 0;
-  if(!parseTimestampNs(tokens[0], parsedTextRecord.timestampNs) || !parseUnsigned64(tokens[1], channelValue) ||
-    !parseUnsigned32Hex(tokens[2], parsedTextRecord.canId) || !parseUnsigned64(tokens[5], dlcValue))
+  std::size_t canIdIndex = 2U;
+  std::size_t dlcIndex = 5U;
+  std::size_t dataStartIndex = 6U;
+  parsedTextRecord.frameType = can_core::FrameType::Can20;
+
+  if(toLower(tokens[1]) == "canfd")
+  {
+    if(tokens.size() < 10U)
+    {
+      return false;
+    }
+
+    parsedTextRecord.frameType = can_core::FrameType::CanFd;
+    if(!parseUnsigned64(tokens[2], channelValue))
+    {
+      return false;
+    }
+
+    canIdIndex = 4U;
+    dlcIndex = 8U;
+    dataStartIndex = 9U;
+  }
+  else if(!parseUnsigned64(tokens[1], channelValue))
+  {
+    return false;
+  }
+
+  const std::string canIdToken = stripExtendedCanSuffix(tokens[canIdIndex]);
+  if(!parseTimestampNs(tokens[0], parsedTextRecord.timestampNs) || !parseUnsigned32Hex(canIdToken, parsedTextRecord.canId) ||
+    !parseUnsigned64(tokens[dlcIndex], dlcValue))
   {
     return false;
   }
@@ -433,7 +490,6 @@ bool AscTraceReader::parseLine(const std::string &line, ParsedTextRecord &parsed
   parsedTextRecord.dlc = static_cast<std::uint8_t>(dlcValue);
   parsedTextRecord.payload.fill(0);
 
-  const std::size_t dataStartIndex = 6;
   const std::size_t dataEndIndex = std::min(tokens.size(), dataStartIndex + dlcValue);
   for(std::size_t index = dataStartIndex; index < dataEndIndex; ++index)
   {
@@ -462,7 +518,24 @@ bool AscTraceReader::shouldSkipLine(const std::string &line) const
   }
 
   const unsigned char firstCharacter = static_cast<unsigned char>(line.front());
-  return !std::isdigit(firstCharacter);
+  if(!std::isdigit(firstCharacter))
+  {
+    return true;
+  }
+
+  const std::vector<std::string> tokens = splitWhitespace(line);
+  if(tokens.size() < 2U)
+  {
+    return true;
+  }
+
+  if(toLower(tokens[1]) == "canfd")
+  {
+    return false;
+  }
+
+  std::uint64_t channelValue = 0;
+  return !parseUnsigned64(tokens[1], channelValue);
 }
 
 bool CandumpReaderFactory::canOpen(const can_reader_api::SourceDescriptor &sourceDescriptor) const

@@ -65,7 +65,12 @@ TEST_CASE("qualification canonical readers satisfy implemented event-model and i
     "qtest_asc",
     ".asc",
     "date Fri Mar 20 00:00:00.000 2026\n"
-    "0.003 2 456 Rx d 2 AA BB\n");
+    "base hex  timestamps absolute\n"
+    "internal events logged\n"
+    "0.003 2 456 Rx d 2 AA BB\n"
+    "0.004 CANFD 15 Rx 3ec 1 0 8 8 db 00 00 00 00 00 00 00 4773 133 203000 0 42030150 42030150 20000000 20000000\n"
+    "0.005 ETH 1 Rx 72:33330000002E027DFA0010008100800286DD60000000003811FFFD537CB8038300020000000000000010FF14000000000000000000000000002EA7F2A63D0038B44300000018000000080000802E780000000000001F00000008892A0060FE0000000000001D000000080000000000000000 Sim:0\n"
+    "0.006 10 1BFD9201x Rx d 8 80 00 00 23 29 04 30 00 Length = 0 BitCount = 0 ID = 469602817x\n");
 
   SUBCASE("candump through factory")
   {
@@ -103,21 +108,28 @@ TEST_CASE("qualification canonical readers satisfy implemented event-model and i
     CHECK(outputBuffer[0].payload[63] == 0x3FU);
   }
 
-  SUBCASE("asc through factory")
+  SUBCASE("asc through factory with mixed-bus robustness")
   {
+    // Requirement trace for the bug fix:
+    // IO-REQ-012
+    // Supported ASC CAN/CAN FD records shall be read even when unsupported non-CAN records are present.
     can_readers_text::AscTraceReaderFactory factory;
     REQUIRE(factory.canOpen(makeSourceDescriptor(ascFile.path())));
     auto reader = factory.create();
-    std::array<can_core::CanEvent, 2> outputBuffer{};
+    std::array<can_core::CanEvent, 4> outputBuffer{};
 
     REQUIRE(reader->open(makeSourceDescriptor(ascFile.path()), {}));
     const can_reader_api::ReadResult readResult = reader->readChunk(outputBuffer);
     REQUIRE_FALSE(readResult.hasError());
-    REQUIRE(readResult.eventCount == 1U);
+    REQUIRE(readResult.eventCount == 3U);
     CHECK(outputBuffer[0].timestampNs == 3000000U);
     CHECK(outputBuffer[0].canId == 0x456U);
     CHECK(outputBuffer[0].channel == 2U);
     CHECK(outputBuffer[0].payload[0] == 0xAAU);
+    CHECK(outputBuffer[1].frameType == can_core::FrameType::CanFd);
+    CHECK(outputBuffer[1].canId == 0x3ECU);
+    CHECK(outputBuffer[2].canId == 0x1BFD9201U);
+    CHECK(outputBuffer[2].channel == 10U);
   }
 }
 

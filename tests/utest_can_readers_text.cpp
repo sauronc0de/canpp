@@ -129,3 +129,40 @@ TEST_CASE("can_readers_text parses candump and ASC traces through reader factori
     CHECK(outputBuffer[0].dlc == 2U);
   }
 }
+
+TEST_CASE("can_readers_text parses mixed ASC content and skips unsupported non-CAN records")
+{
+  const test_support::ScopedTempFile traceFile(
+    "mixed_asc_trace",
+    ".asc",
+    "date Mon Mar 2 10:39:49.909 pm 2026\n"
+    "base hex  timestamps absolute\n"
+    "internal events logged\n"
+    "// version 18.4.0\n"
+    "34.808347 1 131 Rx d 8 00 00 00 A9 00 FE DF FF Length = 234000 BitCount = 121 ID = 305\n"
+    "34.808424 CANFD 15 Rx 3ec 1 0 8 8 db 00 00 00 00 00 00 00 4773 133 203000 0 42030150 42030150 20000000 20000000\n"
+    "35.926432 1 AF9556Ex Rx d 8 00 20 00 00 00 00 00 00 Length = 282000 BitCount = 145 ID = 184112494x\n"
+    "35.927757 CANFD 15 Rx 17331a10x 1 0 5 5 36 96 00 00 00 4329 121 203000 0 42030150 42030150 20000000 20000000\n"
+    "36.075722 ETH 1 Rx 72:33330000002E027DFA0010008100800286DD60000000003811FFFD537CB8038300020000000000000010FF14000000000000000000000000002EA7F2A63D0038B44300000018000000080000802E780000000000001F00000008892A0060FE0000000000001D000000080000000000000000 Sim:0\n"
+    "35.927944 10 1BFD9201x Rx d 8 80 00 00 23 29 04 30 00 Length = 0 BitCount = 0 ID = 469602817x\n");
+
+  can_readers_text::AscTraceReader ascTraceReader;
+  std::array<can_core::CanEvent, 8> outputBuffer{};
+
+  REQUIRE(ascTraceReader.open(makeSourceDescriptor(traceFile.path()), {}));
+  const can_reader_api::ReadResult readResult = ascTraceReader.readChunk(outputBuffer);
+
+  REQUIRE_FALSE(readResult.hasError());
+  REQUIRE(readResult.isEndOfStream);
+  REQUIRE(readResult.eventCount == 5U);
+
+  CHECK(outputBuffer[0].canId == 0x131U);
+  CHECK(outputBuffer[0].channel == 1U);
+  CHECK(outputBuffer[0].frameType == can_core::FrameType::Can20);
+  CHECK(outputBuffer[1].canId == 0x3ECU);
+  CHECK(outputBuffer[1].frameType == can_core::FrameType::CanFd);
+  CHECK(outputBuffer[2].canId == 0x0AF9556EU);
+  CHECK(outputBuffer[3].canId == 0x17331A10U);
+  CHECK(outputBuffer[4].canId == 0x1BFD9201U);
+  CHECK(outputBuffer[4].channel == 10U);
+}
