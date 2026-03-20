@@ -34,6 +34,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(ENABLE_LOG "Enable logging" OFF)
 option(ENABLE_RENDER "Enable rendering" ON)
 option(ENABLE_TEST "Enable tests" OFF)
+option(CANPP_ENABLE_DEVELOP_DATA "Expose the data folder as a development project asset set" OFF)
 
 if(ENABLE_TEST)
   include(CTest)
@@ -65,6 +66,13 @@ add_subdirectory(libraries)
 add_subdirectory(apps)
 add_subdirectory(examples)
 add_subdirectory(src)
+
+if(CANPP_ENABLE_DEVELOP_DATA)
+  file(GLOB_RECURSE CANPP_DEVELOP_DATA_FILES CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/data/*")
+  add_custom_target(develop_data SOURCES ${CANPP_DEVELOP_DATA_FILES})
+  source_group(TREE "${CMAKE_SOURCE_DIR}/data" PREFIX "data" FILES ${CANPP_DEVELOP_DATA_FILES})
+endif()
 
 if(ENABLE_TEST AND BUILD_TESTING)
   add_subdirectory(tests)

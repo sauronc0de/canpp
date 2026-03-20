@@ -45,6 +45,7 @@
       "inherits": "config-linux",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CANPP_ENABLE_DEVELOP_DATA": "ON",
         "ENABLE_LOG": "ON",
         "ENABLE_RENDER": "ON",
         "CMAKE_C_COMPILER_LAUNCHER": "ccache",
@@ -62,6 +63,7 @@
       "inherits": "config-linux",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CANPP_ENABLE_DEVELOP_DATA": "ON",
         "ENABLE_LOG": "ON",
         "ENABLE_RENDER": "OFF",
         "CMAKE_UNITY_BUILD": "ON",
