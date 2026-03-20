@@ -32,6 +32,9 @@ target_link_libraries(itest_can_cache_index PRIVATE can_readers_text can_cache c
 add_canpp_test(itest_can_query_flow itest_can_query_flow.cpp)
 target_link_libraries(itest_can_query_flow PRIVATE can_readers_text can_dbc can_decode can_query)
 
+add_canpp_test(qtest_requirements qtest_requirements.cpp)
+target_link_libraries(qtest_requirements PRIVATE can_app can_readers_text can_cache can_index can_dbc can_decode can_query can_script_api can_script_lua)
+
 add_canpp_test(utest_can_export utest_can_export.cpp)
 target_link_libraries(utest_can_export PRIVATE can_export)
 
