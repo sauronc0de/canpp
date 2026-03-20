@@ -16,6 +16,8 @@ struct RunOptions
   std::string tracePath;
   std::optional<std::string> dbcPath;
   std::optional<std::uint32_t> canIdFilter;
+  std::optional<can_core::FilterExpr> rawFilter;
+  std::optional<can_core::FilterExpr> decodedFilter;
   bool shouldDecodeMatches = false;
   std::optional<can_export::ExportRequest> exportRequest;
 };

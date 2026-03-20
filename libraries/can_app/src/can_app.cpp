@@ -151,16 +151,25 @@ can_reader_api::SourceDescriptor makeSourceDescriptor(const RunOptions &runOptio
 can_core::QuerySpec makeQuerySpec(const RunOptions &runOptions)
 {
   can_core::QuerySpec querySpec;
-  querySpec.shouldDecode = runOptions.shouldDecodeMatches;
+  querySpec.shouldDecode = runOptions.shouldDecodeMatches || runOptions.decodedFilter.has_value();
   querySpec.shouldReturnRaw = true;
 
-  if(runOptions.canIdFilter.has_value())
+  if(runOptions.rawFilter.has_value())
+  {
+    querySpec.rawFilter = *runOptions.rawFilter;
+  }
+  else if(runOptions.canIdFilter.has_value())
   {
     can_core::Predicate predicate;
     predicate.field = can_core::FilterField::CanId;
     predicate.filterOperator = can_core::FilterOperator::Equal;
     predicate.value = static_cast<std::uint64_t>(*runOptions.canIdFilter);
     querySpec.rawFilter = can_core::FilterExpr::makePredicate(std::move(predicate));
+  }
+
+  if(runOptions.decodedFilter.has_value())
+  {
+    querySpec.decodedFilter = *runOptions.decodedFilter;
   }
 
   return querySpec;

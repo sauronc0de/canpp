@@ -165,3 +165,72 @@ TEST_CASE("can_app accepts a real-world-style DBC with header keywords scientifi
   CHECK(rows.front().canEvent.canId == 0x12DD54D6U);
   CHECK_FALSE(rows.front().decodedMessage.has_value());
 }
+
+TEST_CASE("can_app executes combined raw and decoded filter expressions")
+{
+  const test_support::ScopedTempFile traceFile(
+    "app_query_trace",
+    ".csv",
+    "timestamp,channel,can_id,dlc,payload,frame_type\n"
+    "0.001,0,123,2,2A 00,CAN\n"
+    "0.002,1,123,2,05 00,FD\n"
+    "0.003,0,456,1,10,CAN\n"
+    "0.004,1,123,2,00 00,CAN\n");
+  const test_support::ScopedTempFile dbcFile(
+    "app_query_decode",
+    ".dbc",
+    "BO_ 291 VehicleStatus: 8 Vector__XXX\n"
+    " SG_ VehicleSpeed : 0|16@1+ (1,0) [0|65535] \"km/h\" Vector__XXX\n");
+
+  can_core::FilterExpr timestampPredicate = can_core::FilterExpr::makePredicate(
+    {can_core::FilterField::TimestampNs, can_core::FilterOperator::Greater, std::uint64_t{1500000U}});
+  can_core::FilterExpr channelPredicate = can_core::FilterExpr::makePredicate(
+    {can_core::FilterField::Channel, can_core::FilterOperator::Equal, std::uint64_t{1U}});
+  can_core::FilterExpr frameTypePredicate = can_core::FilterExpr::makePredicate(
+    {can_core::FilterField::FrameType, can_core::FilterOperator::Equal, std::uint64_t{static_cast<std::uint8_t>(can_core::FrameType::CanFd)}});
+
+  can_core::FilterExpr rawOrFilter;
+  rawOrFilter.logicalOperator = can_core::LogicalOperator::Or;
+  rawOrFilter.children = {channelPredicate, frameTypePredicate};
+
+  can_core::FilterExpr rawFilter;
+  rawFilter.logicalOperator = can_core::LogicalOperator::And;
+  rawFilter.children = {timestampPredicate, rawOrFilter};
+
+  can_core::FilterExpr decodedNamePredicate = can_core::FilterExpr::makePredicate(
+    {can_core::FilterField::MessageName, can_core::FilterOperator::Equal, std::string("VehicleStatus")});
+  can_core::FilterExpr decodedSignalPredicate = can_core::FilterExpr::makePredicate(
+    {can_core::FilterField::SignalValue, can_core::FilterOperator::Greater, 1.0});
+  can_core::FilterExpr decodedZeroPredicate = can_core::FilterExpr::makePredicate(
+    {can_core::FilterField::SignalValue, can_core::FilterOperator::Equal, 0.0});
+  can_core::FilterExpr decodedNotFilter;
+  decodedNotFilter.logicalOperator = can_core::LogicalOperator::Not;
+  decodedNotFilter.children = {decodedZeroPredicate};
+
+  can_core::FilterExpr decodedFilter;
+  decodedFilter.logicalOperator = can_core::LogicalOperator::And;
+  decodedFilter.children = {decodedNamePredicate, decodedSignalPredicate, decodedNotFilter};
+
+  can_app::RunOptions runOptions;
+  runOptions.tracePath = traceFile.string();
+  runOptions.dbcPath = dbcFile.string();
+  runOptions.rawFilter = rawFilter;
+  runOptions.decodedFilter = decodedFilter;
+  runOptions.shouldDecodeMatches = true;
+
+  std::vector<can_app::QueryResultRow> rows;
+  const can_app::RunSummary runSummary = can_app::CanApp().run(
+    runOptions,
+    [&rows](const can_app::QueryResultRow &queryResultRow)
+    {
+      rows.push_back(queryResultRow);
+    });
+
+  REQUIRE_FALSE(runSummary.hasError());
+  CHECK(runSummary.scannedEvents == 4U);
+  CHECK(runSummary.matchedEvents == 1U);
+  REQUIRE(rows.size() == 1U);
+  REQUIRE(rows.front().decodedMessage.has_value());
+  CHECK(rows.front().decodedMessage->messageName == "VehicleStatus");
+  CHECK(rows.front().ordinal == 1U);
+}

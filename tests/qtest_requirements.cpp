@@ -395,11 +395,29 @@ TEST_CASE("qualification CLI and scripting surface satisfy implemented external-
 {
   // Requirements:
   // CLI-REQ-001, CLI-REQ-002, CLI-REQ-003, CLI-REQ-004
+  // QRY-REQ-001, QRY-REQ-002, QRY-REQ-003, QRY-REQ-004, QRY-REQ-005, QRY-REQ-006
+  // QRY-REQ-009, QRY-REQ-010, QRY-REQ-011, QRY-REQ-012
+  // QRY-REQ-013, QRY-REQ-014, QRY-REQ-015, QRY-REQ-016, QRY-REQ-017
   // EXT-REQ-001, EXT-REQ-002, EXT-REQ-004, EXT-REQ-009
   const std::filesystem::path sourceRoot = std::filesystem::path(DATA_PATH).parent_path();
   const std::string cliSource = readTextFile(sourceRoot / "apps/can_cli/src/main.cpp");
   CHECK(cliSource.find("Usage: ") != std::string::npos);
   CHECK(cliSource.find("--can-id") != std::string::npos);
+  CHECK(cliSource.find("--where") != std::string::npos);
+  CHECK(cliSource.find("--where-or") != std::string::npos);
+  CHECK(cliSource.find("--where-not") != std::string::npos);
+  CHECK(cliSource.find("--decoded-where") != std::string::npos);
+  CHECK(cliSource.find("--decoded-where-or") != std::string::npos);
+  CHECK(cliSource.find("--decoded-where-not") != std::string::npos);
+  CHECK(cliSource.find("message_name") != std::string::npos);
+  CHECK(cliSource.find("signal_name") != std::string::npos);
+  CHECK(cliSource.find("signal_value") != std::string::npos);
+  CHECK(cliSource.find("timestamp_ns") != std::string::npos);
+  CHECK(cliSource.find("frame_type") != std::string::npos);
+  CHECK(cliSource.find("eq ne lt le gt ge contains") != std::string::npos);
+  CHECK(cliSource.find("--context-ordinal") != std::string::npos);
+  CHECK(cliSource.find("--context-before") != std::string::npos);
+  CHECK(cliSource.find("--context-after") != std::string::npos);
   CHECK(cliSource.find("--dbc") != std::string::npos);
   CHECK(cliSource.find("--decode") != std::string::npos);
   CHECK(cliSource.find("--export") != std::string::npos);
