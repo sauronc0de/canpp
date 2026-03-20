@@ -8,7 +8,18 @@
             "args": [
                 "${command:cmake.buildTargetName}",
                 "${command:cmake.activeConfigurePresetName}"
-            ]
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        },
+        {
+            "label": "test_all.sh",
+            "command": "test_all.sh",
+            "type": "shell",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
         }
     ]
 }

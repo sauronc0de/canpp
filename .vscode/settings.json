@@ -75,6 +75,17 @@
             },
             {
                 "cwd": "", // Terminal initial folder ${workspaceFolder} and os user home as defaults
+                "name": "🧪 Test",
+                "color": "#2196F3",
+                "singleInstance": true,
+                "useVsCodeApi": true,
+                "command": "workbench.action.tasks.runTask",
+                "args": [
+                    "test_all.sh"
+                ]
+            },
+            {
+                "cwd": "", // Terminal initial folder ${workspaceFolder} and os user home as defaults
                 "name": "🧩 Dependences",
                 "color": "#FFC107",
                 "singleInstance": true,

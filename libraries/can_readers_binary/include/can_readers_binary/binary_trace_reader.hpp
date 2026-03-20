@@ -46,21 +46,21 @@ private:
 
 class BlfReader : public UnsupportedBinaryReader
 {
-protected:
+public:
   bool canParseExtension(std::string_view extension) const override;
   [[nodiscard]] std::string formatName() const override;
 };
 
 class Mf4Reader : public UnsupportedBinaryReader
 {
-protected:
+public:
   bool canParseExtension(std::string_view extension) const override;
   [[nodiscard]] std::string formatName() const override;
 };
 
 class TrcReader : public UnsupportedBinaryReader
 {
-protected:
+public:
   bool canParseExtension(std::string_view extension) const override;
   [[nodiscard]] std::string formatName() const override;
 };

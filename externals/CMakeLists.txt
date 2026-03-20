@@ -88,11 +88,13 @@ target_link_libraries(lua_common INTERFACE ${LUA_LIBRARIES} sol2::sol2)
 
 # 🌐 Added sol library -----------------------------------#
 # Fetch doctest
-FetchContent_Declare(
-  doctest
-  GIT_REPOSITORY https://github.com/doctest/doctest.git
-  GIT_TAG v2.4.11   # or a newer tag
-)
-FetchContent_MakeAvailable(doctest)
+if(ENABLE_TEST)
+  FetchContent_Declare(
+    doctest
+    GIT_REPOSITORY https://github.com/doctest/doctest.git
+    GIT_TAG v2.4.11
+  )
+  FetchContent_MakeAvailable(doctest)
+endif()
 
 # ------------------------------------------------------------#

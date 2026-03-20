@@ -35,6 +35,10 @@ option(ENABLE_LOG "Enable logging" OFF)
 option(ENABLE_RENDER "Enable rendering" ON)
 option(ENABLE_TEST "Enable tests" OFF)
 
+if(ENABLE_TEST)
+  include(CTest)
+endif()
+
 # Project-wide compile definitions (directory scope)
 add_compile_definitions(
   ASSETS_PATH="${CMAKE_SOURCE_DIR}/assets"
@@ -61,3 +65,7 @@ add_subdirectory(libraries)
 add_subdirectory(apps)
 add_subdirectory(examples)
 add_subdirectory(src)
+
+if(ENABLE_TEST AND BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
