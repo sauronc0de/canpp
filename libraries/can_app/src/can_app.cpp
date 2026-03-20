@@ -219,6 +219,10 @@ RunSummary CanApp::run(const RunOptions &runOptions, const QueryResultCallback &
 
   can_query::QueryExecutionOptions queryExecutionOptions;
   queryExecutionOptions.shouldDecodeMatches = runOptions.shouldDecodeMatches;
+  queryExecutionOptions.startOrdinal = runOptions.startOrdinal;
+  queryExecutionOptions.endOrdinal = runOptions.endOrdinal;
+  queryExecutionOptions.maxMatches = runOptions.maxResultRows;
+  queryExecutionOptions.shouldCancel = runOptions.shouldCancel;
 
   ExportingResultSink callbackResultSink(queryResultCallback, runOptions.exportRequest);
   can_query::QueryExecutor queryExecutor(&decoder);
@@ -229,6 +233,7 @@ RunSummary CanApp::run(const RunOptions &runOptions, const QueryResultCallback &
   traceReader->close();
   runSummary.scannedEvents = querySummary.scannedEvents;
   runSummary.matchedEvents = querySummary.matchedEvents;
+  runSummary.wasCancelled = querySummary.wasCancelled;
   runSummary.errorInfo = querySummary.errorInfo;
   if(!runSummary.hasError() && callbackResultSink.exportSummary().hasError())
   {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -17,6 +18,10 @@ struct QueryExecutionOptions
   std::size_t chunkSize = 4096;
   bool shouldStopAtFirstMatch = false;
   bool shouldDecodeMatches = false;
+  std::optional<std::uint64_t> startOrdinal;
+  std::optional<std::uint64_t> endOrdinal;
+  std::optional<std::size_t> maxMatches;
+  const std::atomic<bool> *shouldCancel = nullptr;
 };
 
 struct CompiledQuery
@@ -36,6 +41,7 @@ struct QuerySummary
 {
   std::uint64_t scannedEvents = 0;
   std::uint64_t matchedEvents = 0;
+  bool wasCancelled = false;
   can_core::ErrorInfo errorInfo;
 
   [[nodiscard]] bool hasError() const

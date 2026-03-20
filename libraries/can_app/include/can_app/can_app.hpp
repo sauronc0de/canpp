@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -18,7 +19,11 @@ struct RunOptions
   std::optional<std::uint32_t> canIdFilter;
   std::optional<can_core::FilterExpr> rawFilter;
   std::optional<can_core::FilterExpr> decodedFilter;
+  std::optional<std::uint64_t> startOrdinal;
+  std::optional<std::uint64_t> endOrdinal;
+  std::optional<std::size_t> maxResultRows;
   bool shouldDecodeMatches = false;
+  const std::atomic<bool> *shouldCancel = nullptr;
   std::optional<can_export::ExportRequest> exportRequest;
 };
 
@@ -35,6 +40,7 @@ struct RunSummary
 {
   std::uint64_t scannedEvents = 0;
   std::uint64_t matchedEvents = 0;
+  bool wasCancelled = false;
   can_core::ErrorInfo errorInfo;
 
   [[nodiscard]] bool hasError() const

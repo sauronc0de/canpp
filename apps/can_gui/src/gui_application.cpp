@@ -28,6 +28,7 @@ namespace
 {
 constexpr std::size_t kInputBufferSize = 256U;
 constexpr std::size_t kMaximumVisibleRows = 5000U;
+constexpr std::uint64_t kDefaultOrdinalWindowSize = 2000U;
 constexpr int kWindowWidth = 1600;
 constexpr int kWindowHeight = 960;
 constexpr auto kRefreshDebounce = std::chrono::milliseconds(250);
@@ -215,53 +216,108 @@ void TraceTableViewModel::setRunOptions(can_app::RunOptions runOptions)
   runOptions_ = std::move(runOptions);
 }
 
-void TraceTableViewModel::refresh(const can_core::QuerySpec &querySpec)
+void TraceTableViewModel::startRefresh(const can_core::QuerySpec &querySpec)
 {
-  rows_.clear();
-  runSummary_ = {};
-  traceMetadata_ = {};
-  visibleChannels_.clear();
-  hasDecodedRows_ = false;
+  cancelRefresh();
 
-  runOptions_.rawFilter.reset();
-  runOptions_.decodedFilter.reset();
-  runOptions_.shouldDecodeMatches = querySpec.shouldDecode;
+  can_app::RunOptions runOptions = runOptions_;
+  runOptions.rawFilter.reset();
+  runOptions.decodedFilter.reset();
+  runOptions.shouldDecodeMatches = querySpec.shouldDecode;
   if(!querySpec.rawFilter.children.empty() || querySpec.rawFilter.predicate.has_value())
   {
-    runOptions_.rawFilter = querySpec.rawFilter;
+    runOptions.rawFilter = querySpec.rawFilter;
   }
   if(querySpec.decodedFilter.has_value())
   {
-    runOptions_.decodedFilter = querySpec.decodedFilter;
+    runOptions.decodedFilter = querySpec.decodedFilter;
   }
 
-  runSummary_ = canApp_.run(
-    runOptions_,
-    [this](const can_app::QueryResultRow &queryResultRow)
+  cancellationFlag_ = std::make_shared<std::atomic<bool>>(false);
+  runOptions.shouldCancel = cancellationFlag_.get();
+  refreshFuture_ = std::async(
+    std::launch::async,
+    [this, runOptions]() mutable
     {
-      if(rows_.size() < kMaximumVisibleRows)
-      {
-        rows_.push_back(queryResultRow);
-      }
+      RefreshSnapshot refreshSnapshot;
+      refreshSnapshot.runSummary = canApp_.run(
+        runOptions,
+        [&refreshSnapshot](const can_app::QueryResultRow &queryResultRow)
+        {
+          if(refreshSnapshot.rows.size() < kMaximumVisibleRows)
+          {
+            refreshSnapshot.rows.push_back(queryResultRow);
+          }
 
-      traceMetadata_.startTimestampNs =
-        rows_.size() == 1U ? queryResultRow.canEvent.timestampNs : std::min(traceMetadata_.startTimestampNs, queryResultRow.canEvent.timestampNs);
-      traceMetadata_.endTimestampNs = std::max(traceMetadata_.endTimestampNs, queryResultRow.canEvent.timestampNs);
+          refreshSnapshot.traceMetadata.startTimestampNs = refreshSnapshot.rows.size() == 1U
+            ? queryResultRow.canEvent.timestampNs
+            : std::min(refreshSnapshot.traceMetadata.startTimestampNs, queryResultRow.canEvent.timestampNs);
+          refreshSnapshot.traceMetadata.endTimestampNs =
+            std::max(refreshSnapshot.traceMetadata.endTimestampNs, queryResultRow.canEvent.timestampNs);
 
-      if(std::find(visibleChannels_.begin(), visibleChannels_.end(), queryResultRow.canEvent.channel) == visibleChannels_.end())
-      {
-        visibleChannels_.push_back(queryResultRow.canEvent.channel);
-        std::sort(visibleChannels_.begin(), visibleChannels_.end());
-      }
+          if(std::find(
+               refreshSnapshot.visibleChannels.begin(),
+               refreshSnapshot.visibleChannels.end(),
+               queryResultRow.canEvent.channel) == refreshSnapshot.visibleChannels.end())
+          {
+            refreshSnapshot.visibleChannels.push_back(queryResultRow.canEvent.channel);
+            std::sort(refreshSnapshot.visibleChannels.begin(), refreshSnapshot.visibleChannels.end());
+          }
 
-      hasDecodedRows_ = hasDecodedRows_ || queryResultRow.decodedMessage.has_value();
+          refreshSnapshot.hasDecodedRows = refreshSnapshot.hasDecodedRows || queryResultRow.decodedMessage.has_value();
+        });
+
+      refreshSnapshot.traceMetadata.sourcePath = runOptions.tracePath;
+      refreshSnapshot.traceMetadata.eventCount = refreshSnapshot.runSummary.matchedEvents;
+      refreshSnapshot.traceMetadata.sourceFormat =
+        runOptions.tracePath.substr(runOptions.tracePath.find_last_of('.') == std::string::npos
+            ? runOptions.tracePath.size()
+            : runOptions.tracePath.find_last_of('.'));
+      refreshSnapshot.wasCancelled = refreshSnapshot.runSummary.wasCancelled;
+      return refreshSnapshot;
     });
+}
 
-  traceMetadata_.sourcePath = runOptions_.tracePath;
-  traceMetadata_.eventCount = runSummary_.matchedEvents;
-  traceMetadata_.sourceFormat = runOptions_.tracePath.substr(runOptions_.tracePath.find_last_of('.') == std::string::npos
-      ? runOptions_.tracePath.size()
-      : runOptions_.tracePath.find_last_of('.'));
+void TraceTableViewModel::cancelRefresh()
+{
+  if(cancellationFlag_ != nullptr)
+  {
+    cancellationFlag_->store(true);
+  }
+}
+
+bool TraceTableViewModel::pollRefresh()
+{
+  if(!refreshFuture_.valid())
+  {
+    return false;
+  }
+
+  if(refreshFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+  {
+    return false;
+  }
+
+  RefreshSnapshot refreshSnapshot = refreshFuture_.get();
+  cancellationFlag_.reset();
+  wasLastRefreshCancelled_ = refreshSnapshot.wasCancelled;
+  if(refreshSnapshot.wasCancelled)
+  {
+    return true;
+  }
+
+  rows_ = std::move(refreshSnapshot.rows);
+  runSummary_ = refreshSnapshot.runSummary;
+  traceMetadata_ = std::move(refreshSnapshot.traceMetadata);
+  visibleChannels_ = std::move(refreshSnapshot.visibleChannels);
+  hasDecodedRows_ = refreshSnapshot.hasDecodedRows;
+  return true;
+}
+
+bool TraceTableViewModel::isRefreshInProgress() const
+{
+  return refreshFuture_.valid() &&
+    refreshFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready;
 }
 
 std::span<const can_app::QueryResultRow> TraceTableViewModel::visibleRows() const
@@ -287,6 +343,11 @@ std::span<const std::uint8_t> TraceTableViewModel::visibleChannels() const
 bool TraceTableViewModel::hasDecodedRows() const
 {
   return hasDecodedRows_;
+}
+
+bool TraceTableViewModel::wasLastRefreshCancelled() const
+{
+  return wasLastRefreshCancelled_;
 }
 
 GuiQueryState QueryPanelViewModel::buildQueryState() const
@@ -334,6 +395,18 @@ GuiQueryState QueryPanelViewModel::buildQueryState() const
     if(channel.has_value())
     {
       rawFilters.push_back(makePredicateExpr(can_core::FilterField::Channel, can_core::FilterOperator::Equal, *channel));
+    }
+  }
+
+  if(enableOrdinalRange)
+  {
+    if(const auto startOrdinal = parseUnsignedInteger(ordinalStartText); startOrdinal.has_value())
+    {
+      guiQueryState.visibleStartOrdinal = *startOrdinal;
+    }
+    if(const auto endOrdinal = parseUnsignedInteger(ordinalEndText); endOrdinal.has_value())
+    {
+      guiQueryState.visibleEndOrdinal = *endOrdinal;
     }
   }
 
@@ -397,6 +470,18 @@ can_app::RunOptions QueryPanelViewModel::buildRunOptions() const
     runOptions.dbcPath = dbcPath;
   }
   runOptions.shouldDecodeMatches = shouldDecodeMatches;
+  if(enableOrdinalRange)
+  {
+    runOptions.startOrdinal = parseUnsignedInteger(ordinalStartText);
+    runOptions.endOrdinal = parseUnsignedInteger(ordinalEndText);
+  }
+  if(enableResultCap)
+  {
+    if(const auto maxResultRows = parseUnsignedInteger(maxRowsText); maxResultRows.has_value())
+    {
+      runOptions.maxResultRows = static_cast<std::size_t>(*maxResultRows);
+    }
+  }
   return runOptions;
 }
 
@@ -561,6 +646,51 @@ int GuiApplication::run()
 void GuiApplication::update()
 {
   handlePendingRefresh();
+  if(traceTableViewModel_.pollRefresh())
+  {
+    guiSession_.runSummary = traceTableViewModel_.runSummary();
+    guiSession_.traceMetadata = traceTableViewModel_.traceMetadata();
+
+    if(traceTableViewModel_.wasLastRefreshCancelled())
+    {
+      guiSession_.statusMessage = "Query cancelled.";
+    }
+    else if(guiSession_.runSummary.hasError())
+    {
+      guiSession_.statusMessage = guiSession_.runSummary.errorInfo.message;
+    }
+    else
+    {
+      const std::size_t visibleRowCount = traceTableViewModel_.visibleRows().size();
+      guiSession_.statusMessage = "Showing " + std::to_string(visibleRowCount) + " rows from " +
+        std::to_string(guiSession_.runSummary.matchedEvents) + " matches in the current scope (" +
+        std::to_string(guiSession_.runSummary.scannedEvents) + " scanned).";
+      if(guiSession_.runSummary.matchedEvents > kMaximumVisibleRows)
+      {
+        guiSession_.statusMessage += " Display is capped to the first " + std::to_string(kMaximumVisibleRows) + " rows.";
+      }
+    }
+
+    const auto rows = traceTableViewModel_.visibleRows();
+    if(!rows.empty())
+    {
+      timelineViewModel_.setBounds(rows.front().canEvent.timestampNs, rows.back().canEvent.timestampNs);
+      if(guiSession_.queryState.visibleStartTimestampNs == 0 && guiSession_.queryState.visibleEndTimestampNs == 0)
+      {
+        timelineViewModel_.setVisibleRange(rows.front().canEvent.timestampNs, rows.back().canEvent.timestampNs);
+      }
+      else
+      {
+        timelineViewModel_.setVisibleRange(
+          guiSession_.queryState.visibleStartTimestampNs,
+          guiSession_.queryState.visibleEndTimestampNs);
+      }
+    }
+
+    guiSession_.hasSelection = false;
+    guiSession_.selectedRowIndex = 0;
+    signalPanelViewModel_.setSelectedRow(nullptr);
+  }
   syncSelection();
 }
 
@@ -658,6 +788,8 @@ bool GuiApplication::initialize()
 
 void GuiApplication::shutdown()
 {
+  traceTableViewModel_.cancelRefresh();
+
   if(isInitialized_)
   {
     ImGui_ImplOpenGL3_Shutdown();
@@ -693,6 +825,10 @@ void GuiApplication::handlePendingRefresh()
     return;
   }
 
+  if(traceTableViewModel_.isRefreshInProgress())
+  {
+    traceTableViewModel_.cancelRefresh();
+  }
   refreshResults();
 }
 
@@ -714,47 +850,12 @@ void GuiApplication::refreshResults()
   }
 
   traceTableViewModel_.setRunOptions(queryPanelViewModel_.buildRunOptions());
-  traceTableViewModel_.refresh(guiSession_.queryState.querySpec);
-  guiSession_.runSummary = traceTableViewModel_.runSummary();
-  guiSession_.traceMetadata = traceTableViewModel_.traceMetadata();
-
-  if(guiSession_.runSummary.hasError())
+  if(traceTableViewModel_.isRefreshInProgress())
   {
-    guiSession_.statusMessage = guiSession_.runSummary.errorInfo.message;
+    traceTableViewModel_.cancelRefresh();
   }
-  else
-  {
-    const std::size_t visibleRowCount = traceTableViewModel_.visibleRows().size();
-    guiSession_.statusMessage = "Showing " + std::to_string(visibleRowCount) + " rows from " +
-      std::to_string(guiSession_.runSummary.matchedEvents) + " matches (" +
-      std::to_string(guiSession_.runSummary.scannedEvents) + " scanned).";
-    if(guiSession_.runSummary.matchedEvents > kMaximumVisibleRows)
-    {
-      guiSession_.statusMessage += " Display is capped to the first " + std::to_string(kMaximumVisibleRows) + " rows.";
-    }
-  }
-
-  const auto rows = traceTableViewModel_.visibleRows();
-  if(!rows.empty())
-  {
-    timelineViewModel_.setBounds(rows.front().canEvent.timestampNs, rows.back().canEvent.timestampNs);
-    if(guiSession_.queryState.visibleStartTimestampNs == 0 && guiSession_.queryState.visibleEndTimestampNs == 0)
-    {
-      timelineViewModel_.setVisibleRange(rows.front().canEvent.timestampNs, rows.back().canEvent.timestampNs);
-      queryPanelViewModel_.timestampStartText = std::to_string(rows.front().canEvent.timestampNs);
-      queryPanelViewModel_.timestampEndText = std::to_string(rows.back().canEvent.timestampNs);
-    }
-    else
-    {
-      timelineViewModel_.setVisibleRange(
-        guiSession_.queryState.visibleStartTimestampNs,
-        guiSession_.queryState.visibleEndTimestampNs);
-    }
-  }
-
-  guiSession_.hasSelection = false;
-  guiSession_.selectedRowIndex = 0;
-  signalPanelViewModel_.setSelectedRow(nullptr);
+  traceTableViewModel_.startRefresh(guiSession_.queryState.querySpec);
+  guiSession_.statusMessage = "Query running for the current scope...";
   isRefreshPending_ = false;
 }
 
@@ -796,6 +897,14 @@ void GuiApplication::renderOverviewPanel()
   ImGui::Text("Matches: %" PRIu64, guiSession_.runSummary.matchedEvents);
   ImGui::Text("Visible rows: %zu", traceTableViewModel_.visibleRows().size());
   ImGui::Text("Decode available: %s", traceTableViewModel_.hasDecodedRows() ? "yes" : "no");
+  ImGui::Text("Query state: %s", traceTableViewModel_.isRefreshInProgress() ? "running" : "idle");
+  if(traceTableViewModel_.isRefreshInProgress())
+  {
+    if(ImGui::Button("Cancel Running Query"))
+    {
+      traceTableViewModel_.cancelRefresh();
+    }
+  }
   ImGui::End();
 }
 
@@ -915,6 +1024,15 @@ void GuiApplication::renderQueryPanel()
   wasEdited = inputText("End ns", queryPanelViewModel_.timestampEndText) || wasEdited;
   ImGui::EndDisabled();
 
+  if(ImGui::Checkbox("Ordinal range", &queryPanelViewModel_.enableOrdinalRange))
+  {
+    wasEdited = true;
+  }
+  ImGui::BeginDisabled(!queryPanelViewModel_.enableOrdinalRange);
+  wasEdited = inputText("Start ordinal", queryPanelViewModel_.ordinalStartText) || wasEdited;
+  wasEdited = inputText("End ordinal", queryPanelViewModel_.ordinalEndText) || wasEdited;
+  ImGui::EndDisabled();
+
   if(ImGui::Checkbox("Channel", &queryPanelViewModel_.enableChannelFilter))
   {
     wasEdited = true;
@@ -931,6 +1049,34 @@ void GuiApplication::renderQueryPanel()
     queryPanelViewModel_.frameTypeSelection =
       static_cast<QueryPanelViewModel::FrameTypeSelection>(frameTypeIndex);
     wasEdited = true;
+  }
+
+  ImGui::SeparatorText("Result window");
+  if(ImGui::Checkbox("Row cap", &queryPanelViewModel_.enableResultCap))
+  {
+    wasEdited = true;
+  }
+  ImGui::SameLine();
+  ImGui::BeginDisabled(!queryPanelViewModel_.enableResultCap);
+  wasEdited = inputText("##max_rows", queryPanelViewModel_.maxRowsText) || wasEdited;
+  ImGui::EndDisabled();
+
+  if(ImGui::Button("Previous Scope"))
+  {
+    shiftOrdinalWindow(-1);
+  }
+  ImGui::SameLine();
+  if(ImGui::Button("Next Scope"))
+  {
+    shiftOrdinalWindow(1);
+  }
+  ImGui::SameLine();
+  if(ImGui::Button("Reset Scope"))
+  {
+    queryPanelViewModel_.enableOrdinalRange = true;
+    queryPanelViewModel_.ordinalStartText = "0";
+    queryPanelViewModel_.ordinalEndText = std::to_string(kDefaultOrdinalWindowSize - 1U);
+    markRefreshNeeded();
   }
 
   ImGui::SeparatorText("Decoded filters");
@@ -965,6 +1111,13 @@ void GuiApplication::renderQueryPanel()
   if(ImGui::Button("Run Query", ImVec2(-1.0F, 0.0F)))
   {
     refreshResults();
+  }
+  if(traceTableViewModel_.isRefreshInProgress())
+  {
+    if(ImGui::Button("Cancel Query", ImVec2(-1.0F, 0.0F)))
+    {
+      traceTableViewModel_.cancelRefresh();
+    }
   }
 
   if(wasEdited)
@@ -1209,6 +1362,26 @@ void GuiApplication::markRefreshNeeded()
 {
   lastEditTime_ = std::chrono::steady_clock::now();
   isRefreshPending_ = true;
+}
+
+void GuiApplication::shiftOrdinalWindow(std::int64_t delta)
+{
+  const std::uint64_t startOrdinal = parseUnsignedInteger(queryPanelViewModel_.ordinalStartText).value_or(0U);
+  const std::uint64_t endOrdinal = parseUnsignedInteger(queryPanelViewModel_.ordinalEndText)
+    .value_or(startOrdinal + kDefaultOrdinalWindowSize - 1U);
+  const std::uint64_t windowSize = endOrdinal >= startOrdinal ? (endOrdinal - startOrdinal + 1U) : kDefaultOrdinalWindowSize;
+
+  std::int64_t nextStartOrdinal = static_cast<std::int64_t>(startOrdinal) + delta * static_cast<std::int64_t>(windowSize);
+  if(nextStartOrdinal < 0)
+  {
+    nextStartOrdinal = 0;
+  }
+
+  const std::uint64_t normalizedStartOrdinal = static_cast<std::uint64_t>(nextStartOrdinal);
+  queryPanelViewModel_.enableOrdinalRange = true;
+  queryPanelViewModel_.ordinalStartText = std::to_string(normalizedStartOrdinal);
+  queryPanelViewModel_.ordinalEndText = std::to_string(normalizedStartOrdinal + windowSize - 1U);
+  markRefreshNeeded();
 }
 
 void GuiApplication::refreshDevelopDataFiles()

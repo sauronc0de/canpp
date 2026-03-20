@@ -9,6 +9,15 @@ namespace can_query
 {
 namespace
 {
+std::string normalizeForCaseInsensitiveCompare(std::string_view value)
+{
+  std::string normalizedValue(value);
+  std::transform(normalizedValue.begin(), normalizedValue.end(), normalizedValue.begin(), [](unsigned char character) {
+    return static_cast<char>(std::tolower(character));
+  });
+  return normalizedValue;
+}
+
 bool isEmptyFilter(const can_core::FilterExpr &filterExpr)
 {
   return !filterExpr.predicate.has_value() && filterExpr.children.empty();
@@ -76,14 +85,17 @@ bool compareNumeric(double leftValue, double rightValue, can_core::FilterOperato
 
 bool compareString(std::string_view leftValue, std::string_view rightValue, can_core::FilterOperator filterOperator)
 {
+  const std::string normalizedLeftValue = normalizeForCaseInsensitiveCompare(leftValue);
+  const std::string normalizedRightValue = normalizeForCaseInsensitiveCompare(rightValue);
+
   switch(filterOperator)
   {
   case can_core::FilterOperator::Equal:
-    return leftValue == rightValue;
+    return normalizedLeftValue == normalizedRightValue;
   case can_core::FilterOperator::NotEqual:
-    return leftValue != rightValue;
+    return normalizedLeftValue != normalizedRightValue;
   case can_core::FilterOperator::Contains:
-    return leftValue.find(rightValue) != std::string_view::npos;
+    return normalizedLeftValue.find(normalizedRightValue) != std::string::npos;
   case can_core::FilterOperator::Less:
   case can_core::FilterOperator::LessOrEqual:
   case can_core::FilterOperator::Greater:
@@ -320,6 +332,12 @@ QuerySummary QueryExecutor::execute(
 
   while(true)
   {
+    if(queryExecutionOptions.shouldCancel != nullptr && queryExecutionOptions.shouldCancel->load())
+    {
+      querySummary.wasCancelled = true;
+      return querySummary;
+    }
+
     can_reader_api::ReadResult readResult = traceReader.readChunk(eventBuffer);
     if(readResult.hasError())
     {
@@ -329,6 +347,23 @@ QuerySummary QueryExecutor::execute(
 
     for(std::size_t index = 0; index < readResult.eventCount; ++index)
     {
+      if(queryExecutionOptions.shouldCancel != nullptr && queryExecutionOptions.shouldCancel->load())
+      {
+        querySummary.wasCancelled = true;
+        return querySummary;
+      }
+
+      if(queryExecutionOptions.endOrdinal.has_value() && ordinal > *queryExecutionOptions.endOrdinal)
+      {
+        return querySummary;
+      }
+
+      if(queryExecutionOptions.startOrdinal.has_value() && ordinal < *queryExecutionOptions.startOrdinal)
+      {
+        ++ordinal;
+        continue;
+      }
+
       ++querySummary.scannedEvents;
       const can_core::CanEvent &canEvent = eventBuffer[index];
       if(!evaluateRawFilter(compiledQuery.querySpec.rawFilter, canEvent))
@@ -374,6 +409,11 @@ QuerySummary QueryExecutor::execute(
         ++querySummary.matchedEvents;
         resultSink.onMatch(queryMatch);
         if(queryExecutionOptions.shouldStopAtFirstMatch)
+        {
+          return querySummary;
+        }
+        if(queryExecutionOptions.maxMatches.has_value() &&
+          querySummary.matchedEvents >= *queryExecutionOptions.maxMatches)
         {
           return querySummary;
         }

@@ -3,6 +3,9 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <future>
+#include <memory>
+#include <atomic>
 #include <optional>
 #include <span>
 #include <string>
@@ -19,6 +22,8 @@ struct GuiQueryState
   can_core::QuerySpec querySpec;
   std::uint64_t visibleStartTimestampNs = 0;
   std::uint64_t visibleEndTimestampNs = 0;
+  std::uint64_t visibleStartOrdinal = 0;
+  std::uint64_t visibleEndOrdinal = 0;
 };
 
 class GuiSession
@@ -40,14 +45,28 @@ class TraceTableViewModel
 {
 public:
   void setRunOptions(can_app::RunOptions runOptions);
-  void refresh(const can_core::QuerySpec &querySpec);
+  void startRefresh(const can_core::QuerySpec &querySpec);
+  void cancelRefresh();
+  [[nodiscard]] bool pollRefresh();
+  [[nodiscard]] bool isRefreshInProgress() const;
   [[nodiscard]] std::span<const can_app::QueryResultRow> visibleRows() const;
   [[nodiscard]] const can_app::RunSummary &runSummary() const;
   [[nodiscard]] const can_core::TraceMetadata &traceMetadata() const;
   [[nodiscard]] std::span<const std::uint8_t> visibleChannels() const;
   [[nodiscard]] bool hasDecodedRows() const;
+  [[nodiscard]] bool wasLastRefreshCancelled() const;
 
 private:
+  struct RefreshSnapshot
+  {
+    std::vector<can_app::QueryResultRow> rows;
+    can_app::RunSummary runSummary;
+    can_core::TraceMetadata traceMetadata;
+    std::vector<std::uint8_t> visibleChannels;
+    bool hasDecodedRows = false;
+    bool wasCancelled = false;
+  };
+
   can_app::CanApp canApp_;
   can_app::RunOptions runOptions_;
   std::vector<can_app::QueryResultRow> rows_;
@@ -55,6 +74,9 @@ private:
   can_core::TraceMetadata traceMetadata_;
   std::vector<std::uint8_t> visibleChannels_;
   bool hasDecodedRows_ = false;
+  bool wasLastRefreshCancelled_ = false;
+  std::future<RefreshSnapshot> refreshFuture_;
+  std::shared_ptr<std::atomic<bool>> cancellationFlag_;
 };
 
 class QueryPanelViewModel
@@ -85,14 +107,19 @@ public:
   std::string messageNameText;
   std::string signalNameText;
   std::string signalValueText;
+  std::string ordinalStartText = "0";
+  std::string ordinalEndText = "1999";
+  std::string maxRowsText = "1000";
   FrameTypeSelection frameTypeSelection = FrameTypeSelection::Any;
   CombineMode combineMode = CombineMode::And;
   bool enableCanIdFilter = false;
   bool enableTimestampRange = false;
+  bool enableOrdinalRange = true;
   bool enableChannelFilter = false;
   bool enableMessageNameFilter = false;
   bool enableSignalNameFilter = false;
   bool enableSignalValueFilter = false;
+  bool enableResultCap = true;
   bool shouldDecodeMatches = false;
 };
 
@@ -151,6 +178,7 @@ private:
   void syncSessionFromDraft();
   void syncSelection();
   void markRefreshNeeded();
+  void shiftOrdinalWindow(std::int64_t delta);
   void refreshDevelopDataFiles();
   void applySelectedDevelopFiles(bool shouldMarkRefresh);
 
