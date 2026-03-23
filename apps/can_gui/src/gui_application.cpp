@@ -180,6 +180,25 @@ std::string formatSignalValue(const can_decode::DecodedSignalValue &decodedSigna
     decodedSignalValue);
 }
 
+std::string formatSignalDisplay(const can_decode::DecodedSignal &decodedSignal)
+{
+  std::string formattedValue = formatSignalValue(decodedSignal.value);
+  if(decodedSignal.valueDescription.has_value())
+  {
+    formattedValue += " (";
+    formattedValue += *decodedSignal.valueDescription;
+    formattedValue += ")";
+  }
+
+  if(!decodedSignal.unit.empty())
+  {
+    formattedValue += ' ';
+    formattedValue += decodedSignal.unit;
+  }
+
+  return formattedValue;
+}
+
 bool hasAnyTraceSource(const QueryPanelViewModel &queryPanelViewModel)
 {
   return !queryPanelViewModel.tracePath.empty();
@@ -1320,13 +1339,12 @@ void GuiApplication::renderSignalPanel()
       selectedRow->decodedMessage->messageName.data());
     for(const can_decode::DecodedSignal &decodedSignal : signalPanelViewModel_.visibleSignals())
     {
+      const std::string formattedSignal = formatSignalDisplay(decodedSignal);
       ImGui::BulletText(
-        "%.*s = %s %.*s",
+        "%.*s = %s",
         static_cast<int>(decodedSignal.name.size()),
         decodedSignal.name.data(),
-        formatSignalValue(decodedSignal.value).c_str(),
-        static_cast<int>(decodedSignal.unit.size()),
-        decodedSignal.unit.data());
+        formattedSignal.c_str());
     }
   }
   else

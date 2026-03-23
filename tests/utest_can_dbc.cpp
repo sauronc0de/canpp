@@ -123,6 +123,27 @@ BO_ 967 Motor_26: 8 ICAS1_X_Gateway
   CHECK(*messageByCanId->signalDefinitions[2].multiplexValue == 1U);
 }
 
+TEST_CASE("can_dbc parses signal value descriptions from VAL_ definitions")
+{
+  static constexpr std::string_view kDbcText = R"dbc(
+BO_ 1440 RLS_01: 8 Vector__XXX
+ SG_ LS_Helligkeit_IR : 0|8@1+ (1,0) [0|255] "" Vector__XXX
+VAL_ 1440 LS_Helligkeit_IR 0 "Dark" 42 "Bright";
+)dbc";
+
+  const can_dbc::DbcLoader dbcLoader;
+  const can_dbc::LoadResult loadResult = dbcLoader.loadFromText(kDbcText);
+
+  REQUIRE_FALSE(loadResult.hasError());
+  const can_dbc::MessageDefinition *messageByCanId = loadResult.database.findMessageByCanId(1440U);
+  REQUIRE(messageByCanId != nullptr);
+  REQUIRE(messageByCanId->signalDefinitions.size() == 1U);
+  const can_dbc::SignalDefinition &signalDefinition = messageByCanId->signalDefinitions.front();
+  REQUIRE(signalDefinition.valueDescriptions.size() == 2U);
+  CHECK(signalDefinition.valueDescriptions.at(0) == "Dark");
+  CHECK(signalDefinition.valueDescriptions.at(42) == "Bright");
+}
+
 TEST_CASE("can_dbc loadFromFile surfaces missing-file errors")
 {
   const can_dbc::DbcLoader dbcLoader;

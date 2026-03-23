@@ -108,6 +108,17 @@ DecodedSignalValue convertValue(std::uint64_t rawValue, const can_dbc::SignalDef
   return scaledValue;
 }
 
+std::optional<std::string> resolveValueDescription(std::uint64_t rawValue, const can_dbc::SignalDefinition &signalDefinition)
+{
+  const auto iterator = signalDefinition.valueDescriptions.find(static_cast<std::int64_t>(rawValue));
+  if(iterator == signalDefinition.valueDescriptions.end())
+  {
+    return std::nullopt;
+  }
+
+  return iterator->second;
+}
+
 std::optional<std::uint64_t> resolveMultiplexerValue(
   const can_core::CanEvent &canEvent,
   const can_dbc::MessageDefinition &messageDefinition)
@@ -174,9 +185,11 @@ DecodeResult Decoder::decode(const can_core::CanEvent &canEvent) const
     }
 
     DecodedSignal decodedSignal;
+    const std::uint64_t rawValue = extractRawValue(canEvent, signalDefinition);
     decodedSignal.name = signalDefinition.name;
     decodedSignal.unit = signalDefinition.unit;
-    decodedSignal.value = convertValue(extractRawValue(canEvent, signalDefinition), signalDefinition);
+    decodedSignal.value = convertValue(rawValue, signalDefinition);
+    decodedSignal.valueDescription = resolveValueDescription(rawValue, signalDefinition);
     decodeResult.decodedMessage.signals.push_back(decodedSignal);
   }
 

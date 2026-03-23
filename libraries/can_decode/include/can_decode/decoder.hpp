@@ -18,6 +18,7 @@ struct DecodedSignal
   std::string name;
   DecodedSignalValue value;
   std::string unit;
+  std::optional<std::string> valueDescription;
 };
 
 struct DecodedMessage

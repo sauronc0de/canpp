@@ -348,6 +348,10 @@ void printMatch(const can_app::QueryResultRow &queryResultRow)
           std::cout << value;
         },
         decodedSignal.value);
+      if(decodedSignal.valueDescription.has_value())
+      {
+        std::cout << " (" << *decodedSignal.valueDescription << ")";
+      }
       if(!decodedSignal.unit.empty())
       {
         std::cout << ' ' << decodedSignal.unit;

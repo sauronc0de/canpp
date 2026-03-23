@@ -241,7 +241,7 @@ TEST_CASE("can_app keeps decoded message and signal names valid after the DBC lo
     "app_lifetime_trace",
     ".csv",
     "timestamp,channel,can_id,dlc,payload,frame_type\n"
-    "0.001,0,1440,2,2A 00,CAN\n");
+    "0.001,0,5A0,2,2A 00,CAN\n");
   const test_support::ScopedTempFile dbcFile(
     "app_lifetime_decode",
     ".dbc",

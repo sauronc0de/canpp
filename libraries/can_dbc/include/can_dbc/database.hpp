@@ -34,6 +34,7 @@ struct SignalDefinition
   double maximum = 0.0;
   std::string unit;
   SignalValueType valueType = SignalValueType::UnsignedInteger;
+  std::unordered_map<std::int64_t, std::string> valueDescriptions;
 };
 
 struct MessageDefinition
@@ -51,6 +52,7 @@ public:
 
   void addMessage(MessageDefinition messageDefinition);
   [[nodiscard]] const MessageDefinition *findMessageByCanId(std::uint32_t canId) const;
+  [[nodiscard]] MessageDefinition *findMessageByCanId(std::uint32_t canId);
   [[nodiscard]] const MessageDefinition *findMessageByName(std::string_view name) const;
   [[nodiscard]] const std::vector<MessageDefinition> &messageDefinitions() const;
   [[nodiscard]] bool isEmpty() const;

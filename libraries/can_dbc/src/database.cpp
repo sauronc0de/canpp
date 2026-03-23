@@ -1,5 +1,6 @@
 #include "can_dbc/database.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
@@ -29,6 +30,8 @@ constexpr int kSignalUnitIndex = 11;
 const std::regex kMessageRegex(R"(^BO_\s+(\d+)\s+([A-Za-z0-9_]+)\s*:\s*(\d+)\s+.*$)");
 const std::regex kSignalRegex(
   R"dbc(^SG_\s+([A-Za-z0-9_]+)(?:\s+([Mm](?:\d+)?))?\s*:\s*(\d+)\|(\d+)@([01])([+-])\s+\(([+-]?[0-9]*\.?[0-9]+(?:[Ee][+-]?[0-9]+)?),([+-]?[0-9]*\.?[0-9]+(?:[Ee][+-]?[0-9]+)?)\)\s+\[([+-]?[0-9]*\.?[0-9]+(?:[Ee][+-]?[0-9]+)?)\|([+-]?[0-9]*\.?[0-9]+(?:[Ee][+-]?[0-9]+)?)\]\s+"([^"]*)".*$)dbc");
+const std::regex kValueDescriptionLineRegex(R"(^VAL_\s+(\d+)\s+(\S+)\s+(.+);\s*$)");
+const std::regex kValueDescriptionPairRegex(R"val((-?\d+)\s+"([^"]*)")val");
 
 std::optional<MessageDefinition> parseMessageDefinition(const std::string &line)
 {
@@ -92,6 +95,47 @@ std::string trim(const std::string &value)
   const std::size_t lastNonWhitespace = value.find_last_not_of(" \t\r\n");
   return value.substr(firstNonWhitespace, lastNonWhitespace - firstNonWhitespace + 1);
 }
+
+bool applyValueDescriptions(Database &database, const std::string &line)
+{
+  std::smatch lineMatch;
+  if(!std::regex_match(line, lineMatch, kValueDescriptionLineRegex))
+  {
+    return false;
+  }
+
+  const std::uint32_t canId = static_cast<std::uint32_t>(std::stoul(lineMatch[1].str()));
+  MessageDefinition *messageDefinition = database.findMessageByCanId(canId);
+  if(messageDefinition == nullptr)
+  {
+    return false;
+  }
+
+  const std::string signalName = lineMatch[2].str();
+  auto signalIterator = std::find_if(
+    messageDefinition->signalDefinitions.begin(),
+    messageDefinition->signalDefinitions.end(),
+    [&signalName](const SignalDefinition &signalDefinition)
+    {
+      return signalDefinition.name == signalName;
+    });
+  if(signalIterator == messageDefinition->signalDefinitions.end())
+  {
+    return false;
+  }
+
+  const std::string valueDescriptionBody = lineMatch[3].str();
+  for(std::sregex_iterator iterator(valueDescriptionBody.begin(), valueDescriptionBody.end(), kValueDescriptionPairRegex),
+      endIterator;
+      iterator != endIterator;
+      ++iterator)
+  {
+    const std::smatch &pairMatch = *iterator;
+    signalIterator->valueDescriptions[std::stoll(pairMatch[1].str())] = pairMatch[2].str();
+  }
+
+  return true;
+}
 } // namespace
 
 void Database::addMessage(MessageDefinition messageDefinition)
@@ -103,6 +147,17 @@ void Database::addMessage(MessageDefinition messageDefinition)
 }
 
 const MessageDefinition *Database::findMessageByCanId(std::uint32_t canId) const
+{
+  const auto iterator = canIdToIndex_.find(canId);
+  if(iterator == canIdToIndex_.end())
+  {
+    return nullptr;
+  }
+
+  return &messageDefinitions_[iterator->second];
+}
+
+MessageDefinition *Database::findMessageByCanId(std::uint32_t canId)
 {
   const auto iterator = canIdToIndex_.find(canId);
   if(iterator == canIdToIndex_.end())
@@ -204,6 +259,18 @@ LoadResult DbcLoader::loadFromText(std::string_view dbcText) const
       }
 
       currentMessageDefinition->signalDefinitions.push_back(*signalDefinition);
+      continue;
+    }
+
+    if(trimmedLine.rfind("VAL_ ", 0) == 0)
+    {
+      if(!applyValueDescriptions(loadResult.database, trimmedLine))
+      {
+        loadResult.errorInfo.code = can_core::ErrorCode::ParseFailure;
+        loadResult.errorInfo.message = "Invalid DBC value description";
+        loadResult.errorInfo.line = lineNumber;
+        return loadResult;
+      }
     }
   }
 

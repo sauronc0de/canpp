@@ -197,3 +197,37 @@ TEST_CASE("can_decode applies DBC multiplexing and exposes only the active branc
     CHECK(std::get<double>(branch1->value) == doctest::Approx(42.0));
   }
 }
+
+TEST_CASE("can_decode carries value description labels from DBC signal definitions")
+{
+  can_dbc::Database database;
+  can_dbc::MessageDefinition messageDefinition;
+  messageDefinition.canId = 1440U;
+  messageDefinition.name = "RLS_01";
+  messageDefinition.dlc = 8U;
+  messageDefinition.signalDefinitions.push_back(
+    {"LS_Helligkeit_IR",
+      false,
+      std::nullopt,
+      0U,
+      8U,
+      true,
+      false,
+      1.0,
+      0.0,
+      0.0,
+      255.0,
+      "",
+      can_dbc::SignalValueType::UnsignedInteger,
+      {{42, "Bright"}}});
+  database.addMessage(messageDefinition);
+
+  can_decode::Decoder decoder(&database);
+  const can_decode::DecodeResult decodeResult = decoder.decode(makeEvent(1440U, {42U}));
+
+  REQUIRE_FALSE(decodeResult.hasError());
+  REQUIRE(decodeResult.decodedMessage.signals.size() == 1U);
+  CHECK(std::get<double>(decodeResult.decodedMessage.signals.front().value) == doctest::Approx(42.0));
+  REQUIRE(decodeResult.decodedMessage.signals.front().valueDescription.has_value());
+  CHECK(*decodeResult.decodedMessage.signals.front().valueDescription == "Bright");
+}
