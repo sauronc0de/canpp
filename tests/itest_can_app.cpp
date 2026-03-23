@@ -234,3 +234,37 @@ TEST_CASE("can_app executes combined raw and decoded filter expressions")
   CHECK(rows.front().decodedMessage->messageName == "VehicleStatus");
   CHECK(rows.front().ordinal == 1U);
 }
+
+TEST_CASE("can_app keeps decoded message and signal names valid after the DBC loader goes out of scope")
+{
+  const test_support::ScopedTempFile traceFile(
+    "app_lifetime_trace",
+    ".csv",
+    "timestamp,channel,can_id,dlc,payload,frame_type\n"
+    "0.001,0,1440,2,2A 00,CAN\n");
+  const test_support::ScopedTempFile dbcFile(
+    "app_lifetime_decode",
+    ".dbc",
+    "BO_ 1440 RLS_01: 8 Vector__XXX\n"
+    " SG_ LS_Helligkeit_IR : 0|16@1+ (1,0) [0|65535] \"\" Vector__XXX\n");
+
+  can_app::RunOptions runOptions;
+  runOptions.tracePath = traceFile.string();
+  runOptions.dbcPath = dbcFile.string();
+  runOptions.shouldDecodeMatches = true;
+
+  std::vector<can_app::QueryResultRow> rows;
+  const can_app::RunSummary runSummary = can_app::CanApp().run(
+    runOptions,
+    [&rows](const can_app::QueryResultRow &queryResultRow)
+    {
+      rows.push_back(queryResultRow);
+    });
+
+  REQUIRE_FALSE(runSummary.hasError());
+  REQUIRE(rows.size() == 1U);
+  REQUIRE(rows.front().decodedMessage.has_value());
+  CHECK(rows.front().decodedMessage->messageName == "RLS_01");
+  REQUIRE(rows.front().decodedMessage->signals.size() == 1U);
+  CHECK(rows.front().decodedMessage->signals.front().name == "LS_Helligkeit_IR");
+}

@@ -15,14 +15,14 @@ using DecodedSignalValue = std::variant<std::int64_t, std::uint64_t, float, doub
 
 struct DecodedSignal
 {
-  std::string_view name;
+  std::string name;
   DecodedSignalValue value;
-  std::string_view unit;
+  std::string unit;
 };
 
 struct DecodedMessage
 {
-  std::string_view messageName;
+  std::string messageName;
   std::uint32_t canId = 0;
   std::vector<DecodedSignal> signals;
 };
