@@ -32,7 +32,10 @@ RUN apt-get install -y lua5.4 liblua5.4-dev
 RUN apt-get install -y clang gdb
 
 # Utilities
-RUN apt-get install -y clang-format clangd lldb
+RUN apt-get install -y clang-format clangd lldb clang-tidy
+
+# C++ style checker dependencies
+RUN apt install -y libyaml-cpp0.7
 
 # Install glew to work with OpenGL with VAOs, Shaders, ...
 RUN apt-get install -y libglew-dev
