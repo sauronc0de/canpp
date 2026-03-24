@@ -223,6 +223,7 @@ RunSummary CanApp::run(const RunOptions &runOptions, const QueryResultCallback &
   queryExecutionOptions.endOrdinal = runOptions.endOrdinal;
   queryExecutionOptions.maxMatches = runOptions.maxResultRows;
   queryExecutionOptions.shouldCancel = runOptions.shouldCancel;
+  queryExecutionOptions.progressCallback = runOptions.progressCallback;
 
   ExportingResultSink callbackResultSink(queryResultCallback, runOptions.exportRequest);
   can_query::QueryExecutor queryExecutor(&decoder);

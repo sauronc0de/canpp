@@ -327,6 +327,18 @@ QuerySummary QueryExecutor::execute(
   const QueryExecutionOptions &queryExecutionOptions) const
 {
   QuerySummary querySummary;
+  const auto publishProgress = [&]()
+  {
+    if(!queryExecutionOptions.progressCallback)
+    {
+      return;
+    }
+
+    const can_core::TraceMetadata traceMetadata = traceReader.metadata();
+    queryExecutionOptions.progressCallback(
+      {querySummary.scannedEvents, querySummary.matchedEvents, traceMetadata.consumedSizeBytes, traceMetadata.sourceSizeBytes});
+  };
+
   std::vector<can_core::CanEvent> eventBuffer(queryExecutionOptions.chunkSize);
   std::uint64_t ordinal = 0;
 
@@ -335,6 +347,7 @@ QuerySummary QueryExecutor::execute(
     if(queryExecutionOptions.shouldCancel != nullptr && queryExecutionOptions.shouldCancel->load())
     {
       querySummary.wasCancelled = true;
+      publishProgress();
       return querySummary;
     }
 
@@ -342,6 +355,7 @@ QuerySummary QueryExecutor::execute(
     if(readResult.hasError())
     {
       querySummary.errorInfo = readResult.errorInfo;
+      publishProgress();
       return querySummary;
     }
 
@@ -350,11 +364,13 @@ QuerySummary QueryExecutor::execute(
       if(queryExecutionOptions.shouldCancel != nullptr && queryExecutionOptions.shouldCancel->load())
       {
         querySummary.wasCancelled = true;
+        publishProgress();
         return querySummary;
       }
 
       if(queryExecutionOptions.endOrdinal.has_value() && ordinal > *queryExecutionOptions.endOrdinal)
       {
+        publishProgress();
         return querySummary;
       }
 
@@ -383,6 +399,7 @@ QuerySummary QueryExecutor::execute(
         {
           querySummary.errorInfo.code = can_core::ErrorCode::DecodeFailure;
           querySummary.errorInfo.message = "Decoder is required but not configured";
+          publishProgress();
           return querySummary;
         }
 
@@ -410,11 +427,13 @@ QuerySummary QueryExecutor::execute(
         resultSink.onMatch(queryMatch);
         if(queryExecutionOptions.shouldStopAtFirstMatch)
         {
+          publishProgress();
           return querySummary;
         }
         if(queryExecutionOptions.maxMatches.has_value() &&
           querySummary.matchedEvents >= *queryExecutionOptions.maxMatches)
         {
+          publishProgress();
           return querySummary;
         }
       }
@@ -422,8 +441,11 @@ QuerySummary QueryExecutor::execute(
       ++ordinal;
     }
 
+    publishProgress();
+
     if(readResult.isEndOfStream)
     {
+      publishProgress();
       return querySummary;
     }
   }

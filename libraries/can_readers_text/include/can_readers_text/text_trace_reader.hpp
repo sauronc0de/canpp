@@ -26,9 +26,13 @@ public:
   bool readLine(std::string &line);
   void close();
   [[nodiscard]] bool isOpen() const;
+  [[nodiscard]] std::uint64_t fileSizeBytes() const;
+  [[nodiscard]] std::uint64_t consumedSizeBytes() const;
 
 private:
   std::ifstream inputFile_;
+  std::uint64_t fileSizeBytes_ = 0;
+  std::uint64_t consumedSizeBytes_ = 0;
 };
 
 class TextTraceReaderBase : public can_reader_api::ITraceReader

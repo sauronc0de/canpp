@@ -24,6 +24,7 @@ struct RunOptions
   std::optional<std::size_t> maxResultRows;
   bool shouldDecodeMatches = false;
   const std::atomic<bool> *shouldCancel = nullptr;
+  std::function<void(const can_query::QueryProgress &)> progressCallback;
   std::optional<can_export::ExportRequest> exportRequest;
 };
 

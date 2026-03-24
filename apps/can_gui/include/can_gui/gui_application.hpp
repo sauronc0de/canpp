@@ -44,6 +44,14 @@ public:
 class TraceTableViewModel
 {
 public:
+  struct ProgressSnapshot
+  {
+    std::uint64_t scannedEvents = 0;
+    std::uint64_t matchedEvents = 0;
+    std::uint64_t bytesParsed = 0;
+    std::uint64_t totalBytes = 0;
+  };
+
   void setRunOptions(can_app::RunOptions runOptions);
   void startRefresh(const can_core::QuerySpec &querySpec);
   void cancelRefresh();
@@ -55,8 +63,19 @@ public:
   [[nodiscard]] std::span<const std::uint8_t> visibleChannels() const;
   [[nodiscard]] bool hasDecodedRows() const;
   [[nodiscard]] bool wasLastRefreshCancelled() const;
+  [[nodiscard]] ProgressSnapshot progressSnapshot() const;
+  [[nodiscard]] std::chrono::system_clock::time_point refreshStartWallClock() const;
+  [[nodiscard]] std::chrono::steady_clock::time_point refreshStartSteadyClock() const;
 
 private:
+  struct SharedProgressState
+  {
+    std::atomic<std::uint64_t> scannedEvents{0};
+    std::atomic<std::uint64_t> matchedEvents{0};
+    std::atomic<std::uint64_t> bytesParsed{0};
+    std::atomic<std::uint64_t> totalBytes{0};
+  };
+
   struct RefreshSnapshot
   {
     std::vector<can_app::QueryResultRow> rows;
@@ -77,6 +96,9 @@ private:
   bool wasLastRefreshCancelled_ = false;
   std::future<RefreshSnapshot> refreshFuture_;
   std::shared_ptr<std::atomic<bool>> cancellationFlag_;
+  std::shared_ptr<SharedProgressState> progressState_;
+  std::chrono::system_clock::time_point refreshStartWallClock_{};
+  std::chrono::steady_clock::time_point refreshStartSteadyClock_{};
 };
 
 class QueryPanelViewModel

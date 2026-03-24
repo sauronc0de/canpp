@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -13,6 +14,14 @@
 
 namespace can_query
 {
+struct QueryProgress
+{
+  std::uint64_t scannedEvents = 0;
+  std::uint64_t matchedEvents = 0;
+  std::uint64_t bytesParsed = 0;
+  std::uint64_t totalBytes = 0;
+};
+
 struct QueryExecutionOptions
 {
   std::size_t chunkSize = 4096;
@@ -22,6 +31,7 @@ struct QueryExecutionOptions
   std::optional<std::uint64_t> endOrdinal;
   std::optional<std::size_t> maxMatches;
   const std::atomic<bool> *shouldCancel = nullptr;
+  std::function<void(const QueryProgress &)> progressCallback;
 };
 
 struct CompiledQuery

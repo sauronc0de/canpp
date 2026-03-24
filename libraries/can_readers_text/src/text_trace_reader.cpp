@@ -4,6 +4,7 @@
 #include <charconv>
 #include <cctype>
 #include <cstdlib>
+#include <filesystem>
 #include <limits>
 #include <regex>
 #include <sstream>
@@ -198,13 +199,39 @@ bool parsePayloadBytes(std::string_view payloadText, std::array<std::uint8_t, 64
 
 bool TextLineReader::open(const std::string &path)
 {
+  consumedSizeBytes_ = 0;
+  fileSizeBytes_ = 0;
+  std::error_code errorCode;
+  const auto fileSize = std::filesystem::file_size(path, errorCode);
+  if(!errorCode)
+  {
+    fileSizeBytes_ = fileSize;
+  }
   inputFile_.open(path);
   return inputFile_.is_open();
 }
 
 bool TextLineReader::readLine(std::string &line)
 {
-  return static_cast<bool>(std::getline(inputFile_, line));
+  if(!std::getline(inputFile_, line))
+  {
+    if(inputFile_.eof())
+    {
+      consumedSizeBytes_ = fileSizeBytes_;
+    }
+    return false;
+  }
+
+  const std::streampos position = inputFile_.tellg();
+  if(position >= 0)
+  {
+    consumedSizeBytes_ = static_cast<std::uint64_t>(position);
+  }
+  else if(inputFile_.eof())
+  {
+    consumedSizeBytes_ = fileSizeBytes_;
+  }
+  return true;
 }
 
 void TextLineReader::close()
@@ -215,6 +242,16 @@ void TextLineReader::close()
 bool TextLineReader::isOpen() const
 {
   return inputFile_.is_open();
+}
+
+std::uint64_t TextLineReader::fileSizeBytes() const
+{
+  return fileSizeBytes_;
+}
+
+std::uint64_t TextLineReader::consumedSizeBytes() const
+{
+  return consumedSizeBytes_;
 }
 
 bool TextTraceReaderBase::open(
@@ -236,6 +273,8 @@ bool TextTraceReaderBase::open(
   traceMetadata_ = {};
   traceMetadata_.sourcePath = sourceDescriptor.path;
   traceMetadata_.sourceFormat = formatName();
+  traceMetadata_.sourceSizeBytes = textLineReader_.fileSizeBytes();
+  traceMetadata_.consumedSizeBytes = 0;
   currentLineNumber_ = 0;
   isOpen_ = true;
   return true;
@@ -280,6 +319,7 @@ can_reader_api::ReadResult TextTraceReaderBase::readChunk(std::span<can_core::Ca
 
     outputBuffer[outputIndex++] = makeCanEvent(parsedTextRecord);
     ++traceMetadata_.eventCount;
+    traceMetadata_.consumedSizeBytes = textLineReader_.consumedSizeBytes();
     if(traceMetadata_.eventCount == 1U)
     {
       traceMetadata_.startTimestampNs = parsedTextRecord.timestampNs;
@@ -291,6 +331,7 @@ can_reader_api::ReadResult TextTraceReaderBase::readChunk(std::span<can_core::Ca
   readResult.isEndOfStream = !textLineReader_.isOpen() || outputIndex < outputBuffer.size();
   if(readResult.isEndOfStream && textLineReader_.isOpen())
   {
+    traceMetadata_.consumedSizeBytes = traceMetadata_.sourceSizeBytes;
     textLineReader_.close();
     isOpen_ = false;
   }

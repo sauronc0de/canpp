@@ -6,10 +6,12 @@
 #include <chrono>
 #include <cctype>
 #include <cinttypes>
+#include <ctime>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iomanip>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -451,6 +453,60 @@ std::string formatSignalDisplay(const can_decode::DecodedSignal &decodedSignal)
   return formattedValue;
 }
 
+std::string formatByteCount(std::uint64_t byteCount)
+{
+  static constexpr std::array<const char *, 4> units = {"B", "KB", "MB", "GB"};
+  double normalizedValue = static_cast<double>(byteCount);
+  std::size_t unitIndex = 0U;
+  while(normalizedValue >= 1024.0 && unitIndex + 1U < units.size())
+  {
+    normalizedValue /= 1024.0;
+    ++unitIndex;
+  }
+
+  std::ostringstream stream;
+  stream.setf(std::ios::fixed, std::ios::floatfield);
+  stream.precision(unitIndex == 0U ? 0 : 1);
+  stream << normalizedValue << ' ' << units[unitIndex];
+  return stream.str();
+}
+
+std::string formatDuration(std::chrono::seconds duration)
+{
+  const auto totalSeconds = duration.count();
+  const auto hours = totalSeconds / 3600;
+  const auto minutes = (totalSeconds % 3600) / 60;
+  const auto seconds = totalSeconds % 60;
+
+  std::ostringstream stream;
+  stream << std::setfill('0');
+  if(hours > 0)
+  {
+    stream << std::setw(2) << hours << ':';
+  }
+  stream << std::setw(2) << minutes << ':' << std::setw(2) << seconds;
+  return stream.str();
+}
+
+std::string formatClockTime(std::chrono::system_clock::time_point timePoint)
+{
+  if(timePoint.time_since_epoch().count() == 0)
+  {
+    return "--:--:--";
+  }
+
+  const std::time_t rawTime = std::chrono::system_clock::to_time_t(timePoint);
+  std::tm timeInfo{};
+#if defined(_WIN32)
+  localtime_s(&timeInfo, &rawTime);
+#else
+  localtime_r(&rawTime, &timeInfo);
+#endif
+  std::ostringstream stream;
+  stream << std::put_time(&timeInfo, "%H:%M:%S");
+  return stream.str();
+}
+
 bool hasAnyTraceSource(const QueryPanelViewModel &queryPanelViewModel)
 {
   return !queryPanelViewModel.tracePath.empty();
@@ -693,11 +749,27 @@ void TraceTableViewModel::startRefresh(const can_core::QuerySpec &querySpec)
     runOptions.decodedFilter = querySpec.decodedFilter;
   }
 
+  refreshStartWallClock_ = std::chrono::system_clock::now();
+  refreshStartSteadyClock_ = std::chrono::steady_clock::now();
   cancellationFlag_ = std::make_shared<std::atomic<bool>>(false);
+  progressState_ = std::make_shared<SharedProgressState>();
+  const std::shared_ptr<SharedProgressState> progressState = progressState_;
   runOptions.shouldCancel = cancellationFlag_.get();
+  runOptions.progressCallback = [progressState](const can_query::QueryProgress &queryProgress)
+  {
+    if(progressState == nullptr)
+    {
+      return;
+    }
+
+    progressState->scannedEvents.store(queryProgress.scannedEvents);
+    progressState->matchedEvents.store(queryProgress.matchedEvents);
+    progressState->bytesParsed.store(queryProgress.bytesParsed);
+    progressState->totalBytes.store(queryProgress.totalBytes);
+  };
   refreshFuture_ = std::async(
     std::launch::async,
-    [this, runOptions]() mutable
+    [this, runOptions, progressState]() mutable
     {
       RefreshSnapshot refreshSnapshot;
       refreshSnapshot.runSummary = canApp_.run(
@@ -734,6 +806,15 @@ void TraceTableViewModel::startRefresh(const can_core::QuerySpec &querySpec)
             ? runOptions.tracePath.size()
             : runOptions.tracePath.find_last_of('.'));
       refreshSnapshot.wasCancelled = refreshSnapshot.runSummary.wasCancelled;
+      if(progressState != nullptr)
+      {
+        progressState->scannedEvents.store(refreshSnapshot.runSummary.scannedEvents);
+        progressState->matchedEvents.store(refreshSnapshot.runSummary.matchedEvents);
+        if(progressState->totalBytes.load() > 0U)
+        {
+          progressState->bytesParsed.store(progressState->totalBytes.load());
+        }
+      }
       return refreshSnapshot;
     });
 }
@@ -808,6 +889,31 @@ bool TraceTableViewModel::hasDecodedRows() const
 bool TraceTableViewModel::wasLastRefreshCancelled() const
 {
   return wasLastRefreshCancelled_;
+}
+
+TraceTableViewModel::ProgressSnapshot TraceTableViewModel::progressSnapshot() const
+{
+  if(progressState_ == nullptr)
+  {
+    return {};
+  }
+
+  ProgressSnapshot progressSnapshot;
+  progressSnapshot.scannedEvents = progressState_->scannedEvents.load();
+  progressSnapshot.matchedEvents = progressState_->matchedEvents.load();
+  progressSnapshot.bytesParsed = progressState_->bytesParsed.load();
+  progressSnapshot.totalBytes = progressState_->totalBytes.load();
+  return progressSnapshot;
+}
+
+std::chrono::system_clock::time_point TraceTableViewModel::refreshStartWallClock() const
+{
+  return refreshStartWallClock_;
+}
+
+std::chrono::steady_clock::time_point TraceTableViewModel::refreshStartSteadyClock() const
+{
+  return refreshStartSteadyClock_;
 }
 
 GuiQueryState QueryPanelViewModel::buildQueryState() const
@@ -1302,13 +1408,14 @@ void GuiApplication::renderMenuBar()
 void GuiApplication::renderOverviewPanel()
 {
   ImGui::SetNextWindowPos(ImVec2(16.0F, 40.0F), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowSize(ImVec2(520.0F, 180.0F), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(520.0F, 235.0F), ImGuiCond_FirstUseEver);
   if(!ImGui::Begin("Session Overview"))
   {
     ImGui::End();
     return;
   }
 
+  const auto currentWallClock = std::chrono::system_clock::now();
   ImGui::TextWrapped("%s", guiSession_.statusMessage.c_str());
   ImGui::Separator();
   ImGui::Text("Trace: %s", guiSession_.tracePath.empty() ? "<none>" : guiSession_.tracePath.c_str());
@@ -1320,6 +1427,59 @@ void GuiApplication::renderOverviewPanel()
   ImGui::Text("Query state: %s", traceTableViewModel_.isRefreshInProgress() ? "running" : "idle");
   if(traceTableViewModel_.isRefreshInProgress())
   {
+    const TraceTableViewModel::ProgressSnapshot progressSnapshot = traceTableViewModel_.progressSnapshot();
+    const auto refreshStartSteadyClock = traceTableViewModel_.refreshStartSteadyClock();
+    const auto refreshStartWallClock = traceTableViewModel_.refreshStartWallClock();
+    float progressFraction = 0.0F;
+    std::string progressLabel = "Starting query...";
+    std::optional<std::chrono::system_clock::time_point> estimatedFinishTime;
+    if(queryPanelViewModel_.enableOrdinalRange)
+    {
+      const std::uint64_t startOrdinal = parseUnsignedInteger(queryPanelViewModel_.ordinalStartText).value_or(0U);
+      const std::uint64_t endOrdinal = parseUnsignedInteger(queryPanelViewModel_.ordinalEndText).value_or(startOrdinal);
+      const std::uint64_t totalLines = endOrdinal >= startOrdinal ? (endOrdinal - startOrdinal + 1U) : 0U;
+      if(totalLines > 0U)
+      {
+        const std::uint64_t processedLines = std::min(progressSnapshot.scannedEvents, totalLines);
+        progressFraction = static_cast<float>(static_cast<double>(processedLines) / static_cast<double>(totalLines));
+        progressLabel = std::to_string(processedLines) + " / " + std::to_string(totalLines) + " lines parsed";
+      }
+    }
+    else if(progressSnapshot.totalBytes > 0U)
+    {
+      const std::uint64_t parsedBytes = std::min(progressSnapshot.bytesParsed, progressSnapshot.totalBytes);
+      progressFraction =
+        static_cast<float>(static_cast<double>(parsedBytes) / static_cast<double>(progressSnapshot.totalBytes));
+      progressLabel = formatByteCount(parsedBytes) + " / " + formatByteCount(progressSnapshot.totalBytes) + " parsed";
+    }
+
+    if(progressFraction > 0.0001F)
+    {
+      const auto elapsed = std::chrono::steady_clock::now() - refreshStartSteadyClock;
+      const double elapsedSeconds =
+        std::chrono::duration_cast<std::chrono::duration<double>>(elapsed).count();
+      const double estimatedRemainingSeconds =
+        std::max(0.0, (elapsedSeconds / static_cast<double>(progressFraction)) - elapsedSeconds);
+      estimatedFinishTime = currentWallClock + std::chrono::duration_cast<std::chrono::system_clock::duration>(
+          std::chrono::duration<double>(estimatedRemainingSeconds));
+      ImGui::Text(
+        "Now: %s | ETA finish: %s | Elapsed: %s",
+        formatClockTime(currentWallClock).c_str(),
+        formatClockTime(*estimatedFinishTime).c_str(),
+        formatDuration(std::chrono::duration_cast<std::chrono::seconds>(elapsed)).c_str());
+    }
+    else
+    {
+      const auto elapsed = std::chrono::steady_clock::now() - refreshStartSteadyClock;
+      ImGui::Text(
+        "Now: %s | Started: %s | Elapsed: %s",
+        formatClockTime(currentWallClock).c_str(),
+        formatClockTime(refreshStartWallClock).c_str(),
+        formatDuration(std::chrono::duration_cast<std::chrono::seconds>(elapsed)).c_str());
+    }
+
+    ImGui::ProgressBar(progressFraction, ImVec2(-1.0F, 0.0F), progressLabel.c_str());
+    ImGui::Text("Live: scanned=%" PRIu64 " matched=%" PRIu64, progressSnapshot.scannedEvents, progressSnapshot.matchedEvents);
     if(ImGui::Button("Cancel Running Query"))
     {
       traceTableViewModel_.cancelRefresh();
