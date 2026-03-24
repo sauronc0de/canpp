@@ -30,7 +30,7 @@ namespace can_gui
 namespace
 {
 constexpr std::size_t kInputBufferSize = 256U;
-constexpr std::size_t kMaximumVisibleRows = 5000U;
+constexpr std::size_t kMaximumVisibleRows = (size_t)-1;
 constexpr std::uint64_t kDefaultOrdinalWindowSize = 2000U;
 constexpr int kWindowWidth = 1600;
 constexpr int kWindowHeight = 960;
@@ -101,9 +101,9 @@ bool inputText(const char *label, std::string &value, ImGuiInputTextFlags inputT
 }
 
 can_core::FilterExpr makePredicateExpr(
-  can_core::FilterField field,
-  can_core::FilterOperator filterOperator,
-  can_core::FilterValue value)
+    can_core::FilterField field,
+    can_core::FilterOperator filterOperator,
+    can_core::FilterValue value)
 {
   can_core::Predicate predicate;
   predicate.field = field;
@@ -137,7 +137,7 @@ bool isStringField(can_core::FilterField field)
 bool isDecodedField(can_core::FilterField field)
 {
   return field == can_core::FilterField::MessageName || field == can_core::FilterField::SignalName ||
-    field == can_core::FilterField::SignalValue;
+         field == can_core::FilterField::SignalValue;
 }
 
 const char *filterFieldLabel(can_core::FilterField field)
@@ -205,8 +205,7 @@ std::optional<can_core::FilterValue> parseFilterValue(can_core::FilterField fiel
   case can_core::FilterField::CanId:
   case can_core::FilterField::Channel:
     return parseUnsignedInteger(trimmedValue);
-  case can_core::FilterField::FrameType:
-  {
+  case can_core::FilterField::FrameType: {
     std::string lowerValue = trimmedValue;
     std::transform(lowerValue.begin(), lowerValue.end(), lowerValue.begin(), [](unsigned char character) {
       return static_cast<char>(std::tolower(character));
@@ -247,7 +246,7 @@ std::vector<ExpandedRuleClause> expandRuleClauses(const QueryPanelViewModel::Fil
   }
 
   if(trimmedValue.find('&') == std::string::npos && trimmedValue.find('|') == std::string::npos &&
-    trimmedValue.find(',') == std::string::npos)
+     trimmedValue.find(',') == std::string::npos)
   {
     expandedClauses.push_back({rule.clauseMode, trimmedValue});
     return expandedClauses;
@@ -268,8 +267,7 @@ std::vector<ExpandedRuleClause> expandRuleClauses(const QueryPanelViewModel::Fil
   }
 
   std::size_t tokenStart = 0U;
-  const auto flushToken = [&](std::size_t tokenEnd)
-  {
+  const auto flushToken = [&](std::size_t tokenEnd) {
     std::string token = trimCopy(std::string_view(trimmedValue).substr(tokenStart, tokenEnd - tokenStart));
     if(token.empty())
     {
@@ -304,8 +302,8 @@ std::vector<ExpandedRuleClause> expandRuleClauses(const QueryPanelViewModel::Fil
 }
 
 std::optional<can_core::FilterExpr> buildRuleFilter(
-  const std::vector<QueryPanelViewModel::FilterRuleDraft> &rules,
-  bool *requiresDecode = nullptr)
+    const std::vector<QueryPanelViewModel::FilterRuleDraft> &rules,
+    bool *requiresDecode = nullptr)
 {
   std::vector<can_core::FilterExpr> mustClauses;
   std::vector<can_core::FilterExpr> anyClauses;
@@ -340,8 +338,7 @@ std::optional<can_core::FilterExpr> buildRuleFilter(
       case QueryPanelViewModel::ClauseMode::Any:
         anyClauses.push_back(std::move(predicateExpr));
         break;
-      case QueryPanelViewModel::ClauseMode::Exclude:
-      {
+      case QueryPanelViewModel::ClauseMode::Exclude: {
         can_core::FilterExpr notExpr;
         notExpr.logicalOperator = can_core::LogicalOperator::Not;
         notExpr.children.push_back(std::move(predicateExpr));
@@ -425,13 +422,12 @@ std::string formatPayload(const can_core::CanEvent &canEvent)
 std::string formatSignalValue(const can_decode::DecodedSignalValue &decodedSignalValue)
 {
   return std::visit(
-    [](const auto &value)
-    {
-      std::ostringstream stream;
-      stream << value;
-      return stream.str();
-    },
-    decodedSignalValue);
+      [](const auto &value) {
+        std::ostringstream stream;
+        stream << value;
+        return stream.str();
+      },
+      decodedSignalValue);
 }
 
 std::string formatSignalDisplay(const can_decode::DecodedSignal &decodedSignal)
@@ -540,10 +536,10 @@ void textUnformatted(std::string_view text)
 std::span<const can_core::FilterField> availableRawFields()
 {
   static constexpr std::array<can_core::FilterField, 4> fields = {
-    can_core::FilterField::CanId,
-    can_core::FilterField::TimestampNs,
-    can_core::FilterField::Channel,
-    can_core::FilterField::FrameType,
+      can_core::FilterField::CanId,
+      can_core::FilterField::TimestampNs,
+      can_core::FilterField::Channel,
+      can_core::FilterField::FrameType,
   };
   return fields;
 }
@@ -551,9 +547,9 @@ std::span<const can_core::FilterField> availableRawFields()
 std::span<const can_core::FilterField> availableDecodedFields()
 {
   static constexpr std::array<can_core::FilterField, 3> fields = {
-    can_core::FilterField::MessageName,
-    can_core::FilterField::SignalName,
-    can_core::FilterField::SignalValue,
+      can_core::FilterField::MessageName,
+      can_core::FilterField::SignalName,
+      can_core::FilterField::SignalValue,
   };
   return fields;
 }
@@ -561,17 +557,17 @@ std::span<const can_core::FilterField> availableDecodedFields()
 std::span<const can_core::FilterOperator> availableOperators(can_core::FilterField field)
 {
   static constexpr std::array<can_core::FilterOperator, 6> numericOperators = {
-    can_core::FilterOperator::Equal,
-    can_core::FilterOperator::NotEqual,
-    can_core::FilterOperator::Less,
-    can_core::FilterOperator::LessOrEqual,
-    can_core::FilterOperator::Greater,
-    can_core::FilterOperator::GreaterOrEqual,
+      can_core::FilterOperator::Equal,
+      can_core::FilterOperator::NotEqual,
+      can_core::FilterOperator::Less,
+      can_core::FilterOperator::LessOrEqual,
+      can_core::FilterOperator::Greater,
+      can_core::FilterOperator::GreaterOrEqual,
   };
   static constexpr std::array<can_core::FilterOperator, 3> stringOperators = {
-    can_core::FilterOperator::Contains,
-    can_core::FilterOperator::Equal,
-    can_core::FilterOperator::NotEqual,
+      can_core::FilterOperator::Contains,
+      can_core::FilterOperator::Equal,
+      can_core::FilterOperator::NotEqual,
   };
   return isStringField(field) ? std::span<const can_core::FilterOperator>(stringOperators)
                               : std::span<const can_core::FilterOperator>(numericOperators);
@@ -602,10 +598,10 @@ int operatorIndexFor(can_core::FilterOperator filterOperator, std::span<const ca
 }
 
 bool renderRuleEditor(
-  const char *sectionId,
-  const char *emptyLabel,
-  std::vector<QueryPanelViewModel::FilterRuleDraft> &rules,
-  std::span<const can_core::FilterField> availableFields)
+    const char *sectionId,
+    const char *emptyLabel,
+    std::vector<QueryPanelViewModel::FilterRuleDraft> &rules,
+    std::span<const can_core::FilterField> availableFields)
 {
   bool wasEdited = false;
   ImGui::PushID(sectionId);
@@ -695,12 +691,12 @@ bool renderRuleEditor(
 }
 
 bool renderCompactRangeInputs(
-  const char *label,
-  bool &enabled,
-  std::string &startValue,
-  std::string &endValue,
-  const char *startHint,
-  const char *endHint)
+    const char *label,
+    bool &enabled,
+    std::string &startValue,
+    std::string &endValue,
+    const char *startHint,
+    const char *endHint)
 {
   bool wasEdited = false;
   if(ImGui::Checkbox(label, &enabled))
@@ -755,8 +751,7 @@ void TraceTableViewModel::startRefresh(const can_core::QuerySpec &querySpec)
   progressState_ = std::make_shared<SharedProgressState>();
   const std::shared_ptr<SharedProgressState> progressState = progressState_;
   runOptions.shouldCancel = cancellationFlag_.get();
-  runOptions.progressCallback = [progressState](const can_query::QueryProgress &queryProgress)
-  {
+  runOptions.progressCallback = [progressState](const can_query::QueryProgress &queryProgress) {
     if(progressState == nullptr)
     {
       return;
@@ -768,55 +763,53 @@ void TraceTableViewModel::startRefresh(const can_core::QuerySpec &querySpec)
     progressState->totalBytes.store(queryProgress.totalBytes);
   };
   refreshFuture_ = std::async(
-    std::launch::async,
-    [this, runOptions, progressState]() mutable
-    {
-      RefreshSnapshot refreshSnapshot;
-      refreshSnapshot.runSummary = canApp_.run(
-        runOptions,
-        [&refreshSnapshot](const can_app::QueryResultRow &queryResultRow)
+      std::launch::async,
+      [this, runOptions, progressState]() mutable {
+        RefreshSnapshot refreshSnapshot;
+        refreshSnapshot.runSummary = canApp_.run(
+            runOptions,
+            [&refreshSnapshot](const can_app::QueryResultRow &queryResultRow) {
+              if(refreshSnapshot.rows.size() < kMaximumVisibleRows)
+              {
+                refreshSnapshot.rows.push_back(queryResultRow);
+              }
+
+              refreshSnapshot.traceMetadata.startTimestampNs = refreshSnapshot.rows.size() == 1U
+                                                                   ? queryResultRow.canEvent.timestampNs
+                                                                   : std::min(refreshSnapshot.traceMetadata.startTimestampNs, queryResultRow.canEvent.timestampNs);
+              refreshSnapshot.traceMetadata.endTimestampNs =
+                  std::max(refreshSnapshot.traceMetadata.endTimestampNs, queryResultRow.canEvent.timestampNs);
+
+              if(std::find(
+                     refreshSnapshot.visibleChannels.begin(),
+                     refreshSnapshot.visibleChannels.end(),
+                     queryResultRow.canEvent.channel) == refreshSnapshot.visibleChannels.end())
+              {
+                refreshSnapshot.visibleChannels.push_back(queryResultRow.canEvent.channel);
+                std::sort(refreshSnapshot.visibleChannels.begin(), refreshSnapshot.visibleChannels.end());
+              }
+
+              refreshSnapshot.hasDecodedRows = refreshSnapshot.hasDecodedRows || queryResultRow.decodedMessage.has_value();
+            });
+
+        refreshSnapshot.traceMetadata.sourcePath = runOptions.tracePath;
+        refreshSnapshot.traceMetadata.eventCount = refreshSnapshot.runSummary.matchedEvents;
+        refreshSnapshot.traceMetadata.sourceFormat =
+            runOptions.tracePath.substr(runOptions.tracePath.find_last_of('.') == std::string::npos
+                                            ? runOptions.tracePath.size()
+                                            : runOptions.tracePath.find_last_of('.'));
+        refreshSnapshot.wasCancelled = refreshSnapshot.runSummary.wasCancelled;
+        if(progressState != nullptr)
         {
-          if(refreshSnapshot.rows.size() < kMaximumVisibleRows)
+          progressState->scannedEvents.store(refreshSnapshot.runSummary.scannedEvents);
+          progressState->matchedEvents.store(refreshSnapshot.runSummary.matchedEvents);
+          if(progressState->totalBytes.load() > 0U)
           {
-            refreshSnapshot.rows.push_back(queryResultRow);
+            progressState->bytesParsed.store(progressState->totalBytes.load());
           }
-
-          refreshSnapshot.traceMetadata.startTimestampNs = refreshSnapshot.rows.size() == 1U
-            ? queryResultRow.canEvent.timestampNs
-            : std::min(refreshSnapshot.traceMetadata.startTimestampNs, queryResultRow.canEvent.timestampNs);
-          refreshSnapshot.traceMetadata.endTimestampNs =
-            std::max(refreshSnapshot.traceMetadata.endTimestampNs, queryResultRow.canEvent.timestampNs);
-
-          if(std::find(
-               refreshSnapshot.visibleChannels.begin(),
-               refreshSnapshot.visibleChannels.end(),
-               queryResultRow.canEvent.channel) == refreshSnapshot.visibleChannels.end())
-          {
-            refreshSnapshot.visibleChannels.push_back(queryResultRow.canEvent.channel);
-            std::sort(refreshSnapshot.visibleChannels.begin(), refreshSnapshot.visibleChannels.end());
-          }
-
-          refreshSnapshot.hasDecodedRows = refreshSnapshot.hasDecodedRows || queryResultRow.decodedMessage.has_value();
-        });
-
-      refreshSnapshot.traceMetadata.sourcePath = runOptions.tracePath;
-      refreshSnapshot.traceMetadata.eventCount = refreshSnapshot.runSummary.matchedEvents;
-      refreshSnapshot.traceMetadata.sourceFormat =
-        runOptions.tracePath.substr(runOptions.tracePath.find_last_of('.') == std::string::npos
-            ? runOptions.tracePath.size()
-            : runOptions.tracePath.find_last_of('.'));
-      refreshSnapshot.wasCancelled = refreshSnapshot.runSummary.wasCancelled;
-      if(progressState != nullptr)
-      {
-        progressState->scannedEvents.store(refreshSnapshot.runSummary.scannedEvents);
-        progressState->matchedEvents.store(refreshSnapshot.runSummary.matchedEvents);
-        if(progressState->totalBytes.load() > 0U)
-        {
-          progressState->bytesParsed.store(progressState->totalBytes.load());
         }
-      }
-      return refreshSnapshot;
-    });
+        return refreshSnapshot;
+      });
 }
 
 void TraceTableViewModel::cancelRefresh()
@@ -858,7 +851,7 @@ bool TraceTableViewModel::pollRefresh()
 bool TraceTableViewModel::isRefreshInProgress() const
 {
   return refreshFuture_.valid() &&
-    refreshFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready;
+         refreshFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready;
 }
 
 std::span<const can_app::QueryResultRow> TraceTableViewModel::visibleRows() const
@@ -931,21 +924,21 @@ GuiQueryState QueryPanelViewModel::buildQueryState() const
     if(timestampStart.has_value())
     {
       effectiveRawRules.push_back(
-        {can_core::FilterField::TimestampNs,
-         can_core::FilterOperator::GreaterOrEqual,
-         ClauseMode::Must,
-         std::to_string(*timestampStart),
-         true});
+          {can_core::FilterField::TimestampNs,
+           can_core::FilterOperator::GreaterOrEqual,
+           ClauseMode::Must,
+           std::to_string(*timestampStart),
+           true});
       guiQueryState.visibleStartTimestampNs = *timestampStart;
     }
     if(timestampEnd.has_value())
     {
       effectiveRawRules.push_back(
-        {can_core::FilterField::TimestampNs,
-         can_core::FilterOperator::LessOrEqual,
-         ClauseMode::Must,
-         std::to_string(*timestampEnd),
-         true});
+          {can_core::FilterField::TimestampNs,
+           can_core::FilterOperator::LessOrEqual,
+           ClauseMode::Must,
+           std::to_string(*timestampEnd),
+           true});
       guiQueryState.visibleEndTimestampNs = *timestampEnd;
     }
   }
@@ -1001,7 +994,7 @@ void QueryPanelViewModel::resetToDefaults()
   decodedRules.clear();
   rawRules.push_back({can_core::FilterField::CanId, can_core::FilterOperator::Equal, ClauseMode::Must, "", true});
   decodedRules.push_back(
-    {can_core::FilterField::MessageName, can_core::FilterOperator::Contains, ClauseMode::Must, "", true});
+      {can_core::FilterField::MessageName, can_core::FilterOperator::Contains, ClauseMode::Must, "", true});
 }
 
 void TimelineViewModel::setVisibleRange(std::uint64_t visibleStartTimestampNs, std::uint64_t visibleEndTimestampNs)
@@ -1021,8 +1014,8 @@ void TimelineViewModel::setBounds(std::uint64_t minimumTimestampNs, std::uint64_
 void TimelineViewModel::zoomIn()
 {
   const std::uint64_t currentSpan = visibleEndTimestampNs_ > visibleStartTimestampNs_
-    ? visibleEndTimestampNs_ - visibleStartTimestampNs_
-    : 0;
+                                        ? visibleEndTimestampNs_ - visibleStartTimestampNs_
+                                        : 0;
   const std::uint64_t center = visibleStartTimestampNs_ + currentSpan / 2U;
   const std::uint64_t newHalfSpan = std::max<std::uint64_t>(1U, currentSpan / 4U);
   visibleStartTimestampNs_ = center > newHalfSpan ? center - newHalfSpan : minimumTimestampNs_;
@@ -1033,8 +1026,8 @@ void TimelineViewModel::zoomIn()
 void TimelineViewModel::zoomOut()
 {
   const std::uint64_t currentSpan = visibleEndTimestampNs_ > visibleStartTimestampNs_
-    ? visibleEndTimestampNs_ - visibleStartTimestampNs_
-    : 0;
+                                        ? visibleEndTimestampNs_ - visibleStartTimestampNs_
+                                        : 0;
   const std::uint64_t center = visibleStartTimestampNs_ + currentSpan / 2U;
   const std::uint64_t newHalfSpan = std::max<std::uint64_t>(1U, currentSpan);
   visibleStartTimestampNs_ = center > newHalfSpan ? center - newHalfSpan : minimumTimestampNs_;
@@ -1045,8 +1038,8 @@ void TimelineViewModel::zoomOut()
 void TimelineViewModel::moveToTimestamp(std::uint64_t timestampNs)
 {
   const std::uint64_t currentSpan = visibleEndTimestampNs_ > visibleStartTimestampNs_
-    ? visibleEndTimestampNs_ - visibleStartTimestampNs_
-    : 0;
+                                        ? visibleEndTimestampNs_ - visibleStartTimestampNs_
+                                        : 0;
   const std::uint64_t halfSpan = std::max<std::uint64_t>(1U, currentSpan / 2U);
   visibleStartTimestampNs_ = timestampNs > halfSpan ? timestampNs - halfSpan : minimumTimestampNs_;
   visibleEndTimestampNs_ = timestampNs + halfSpan;
@@ -1098,7 +1091,7 @@ std::span<const can_decode::DecodedSignal> SignalPanelViewModel::visibleSignals(
 }
 
 GuiApplication::GuiApplication(std::vector<std::string> arguments)
-  : arguments_(std::move(arguments))
+    : arguments_(std::move(arguments))
 {
   queryPanelViewModel_.resetToDefaults();
   if(arguments_.size() > 1U)
@@ -1135,7 +1128,7 @@ int GuiApplication::run()
         isRunning_ = false;
       }
       if(event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE &&
-        event.window.windowID == SDL_GetWindowID(g_window))
+         event.window.windowID == SDL_GetWindowID(g_window))
       {
         isRunning_ = false;
       }
@@ -1183,8 +1176,8 @@ void GuiApplication::update()
     {
       const std::size_t visibleRowCount = traceTableViewModel_.visibleRows().size();
       guiSession_.statusMessage = "Showing " + std::to_string(visibleRowCount) + " rows from " +
-        std::to_string(guiSession_.runSummary.matchedEvents) + " matches in the current scope (" +
-        std::to_string(guiSession_.runSummary.scannedEvents) + " scanned).";
+                                  std::to_string(guiSession_.runSummary.matchedEvents) + " matches in the current scope (" +
+                                  std::to_string(guiSession_.runSummary.scannedEvents) + " scanned).";
       if(guiSession_.runSummary.matchedEvents > kMaximumVisibleRows)
       {
         guiSession_.statusMessage += " Display is capped to the first " + std::to_string(kMaximumVisibleRows) + " rows.";
@@ -1202,8 +1195,8 @@ void GuiApplication::update()
       else
       {
         timelineViewModel_.setVisibleRange(
-          guiSession_.queryState.visibleStartTimestampNs,
-          guiSession_.queryState.visibleEndTimestampNs);
+            guiSession_.queryState.visibleStartTimestampNs,
+            guiSession_.queryState.visibleEndTimestampNs);
       }
     }
 
@@ -1246,12 +1239,12 @@ bool GuiApplication::initialize()
   SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
 
   g_window = SDL_CreateWindow(
-    "CAN Trace Explorer",
-    SDL_WINDOWPOS_CENTERED,
-    SDL_WINDOWPOS_CENTERED,
-    kWindowWidth,
-    kWindowHeight,
-    SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
+      "CAN Trace Explorer",
+      SDL_WINDOWPOS_CENTERED,
+      SDL_WINDOWPOS_CENTERED,
+      kWindowWidth,
+      kWindowHeight,
+      SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
   if(g_window == nullptr)
   {
     guiSession_.statusMessage = std::string("Window creation failed: ") + SDL_GetError();
@@ -1273,7 +1266,7 @@ bool GuiApplication::initialize()
   if(glewError != GLEW_OK)
   {
     guiSession_.statusMessage = std::string("GLEW initialization failed: ") +
-      reinterpret_cast<const char *>(glewGetErrorString(glewError));
+                                reinterpret_cast<const char *>(glewGetErrorString(glewError));
     return false;
   }
 
@@ -1302,7 +1295,7 @@ bool GuiApplication::initialize()
   if(hasAnyTraceSource(queryPanelViewModel_))
   {
     guiSession_.statusMessage =
-      "Trace and DBC inputs are ready. Press Run Query to start, or enable Auto refresh after narrowing the draft.";
+        "Trace and DBC inputs are ready. Press Run Query to start, or enable Auto refresh after narrowing the draft.";
   }
   else
   {
@@ -1369,7 +1362,7 @@ void GuiApplication::refreshResults()
 
   const GuiQueryState draftQueryState = queryPanelViewModel_.buildQueryState();
   if((draftQueryState.querySpec.decodedFilter.has_value() || draftQueryState.querySpec.shouldDecode) &&
-    queryPanelViewModel_.dbcPath.empty())
+     queryPanelViewModel_.dbcPath.empty())
   {
     guiSession_.statusMessage = "A DBC path is required for decoded queries or decoded result display.";
     return;
@@ -1449,7 +1442,7 @@ void GuiApplication::renderOverviewPanel()
     {
       const std::uint64_t parsedBytes = std::min(progressSnapshot.bytesParsed, progressSnapshot.totalBytes);
       progressFraction =
-        static_cast<float>(static_cast<double>(parsedBytes) / static_cast<double>(progressSnapshot.totalBytes));
+          static_cast<float>(static_cast<double>(parsedBytes) / static_cast<double>(progressSnapshot.totalBytes));
       progressLabel = formatByteCount(parsedBytes) + " / " + formatByteCount(progressSnapshot.totalBytes) + " parsed";
     }
 
@@ -1457,25 +1450,25 @@ void GuiApplication::renderOverviewPanel()
     {
       const auto elapsed = std::chrono::steady_clock::now() - refreshStartSteadyClock;
       const double elapsedSeconds =
-        std::chrono::duration_cast<std::chrono::duration<double>>(elapsed).count();
+          std::chrono::duration_cast<std::chrono::duration<double>>(elapsed).count();
       const double estimatedRemainingSeconds =
-        std::max(0.0, (elapsedSeconds / static_cast<double>(progressFraction)) - elapsedSeconds);
+          std::max(0.0, (elapsedSeconds / static_cast<double>(progressFraction)) - elapsedSeconds);
       estimatedFinishTime = currentWallClock + std::chrono::duration_cast<std::chrono::system_clock::duration>(
-          std::chrono::duration<double>(estimatedRemainingSeconds));
+                                                   std::chrono::duration<double>(estimatedRemainingSeconds));
       ImGui::Text(
-        "Now: %s | ETA finish: %s | Elapsed: %s",
-        formatClockTime(currentWallClock).c_str(),
-        formatClockTime(*estimatedFinishTime).c_str(),
-        formatDuration(std::chrono::duration_cast<std::chrono::seconds>(elapsed)).c_str());
+          "Now: %s | ETA finish: %s | Elapsed: %s",
+          formatClockTime(currentWallClock).c_str(),
+          formatClockTime(*estimatedFinishTime).c_str(),
+          formatDuration(std::chrono::duration_cast<std::chrono::seconds>(elapsed)).c_str());
     }
     else
     {
       const auto elapsed = std::chrono::steady_clock::now() - refreshStartSteadyClock;
       ImGui::Text(
-        "Now: %s | Started: %s | Elapsed: %s",
-        formatClockTime(currentWallClock).c_str(),
-        formatClockTime(refreshStartWallClock).c_str(),
-        formatDuration(std::chrono::duration_cast<std::chrono::seconds>(elapsed)).c_str());
+          "Now: %s | Started: %s | Elapsed: %s",
+          formatClockTime(currentWallClock).c_str(),
+          formatClockTime(refreshStartWallClock).c_str(),
+          formatDuration(std::chrono::duration_cast<std::chrono::seconds>(elapsed)).c_str());
     }
 
     ImGui::ProgressBar(progressFraction, ImVec2(-1.0F, 0.0F), progressLabel.c_str());
@@ -1591,11 +1584,11 @@ void GuiApplication::renderQueryPanel()
   if(ImGui::CollapsingHeader(decodedHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
   {
     wasEdited = renderRuleEditor(
-                  "decoded",
-                  "No decoded rules yet.",
-                  queryPanelViewModel_.decodedRules,
-                  availableDecodedFields()) ||
-      wasEdited;
+                    "decoded",
+                    "No decoded rules yet.",
+                    queryPanelViewModel_.decodedRules,
+                    availableDecodedFields()) ||
+                wasEdited;
     ImGui::Spacing();
   }
 
@@ -1607,22 +1600,22 @@ void GuiApplication::renderQueryPanel()
 
   ImGui::SeparatorText("Window");
   wasEdited = renderCompactRangeInputs(
-                "Timestamp",
-                queryPanelViewModel_.enableTimestampRange,
-                queryPanelViewModel_.timestampStartText,
-                queryPanelViewModel_.timestampEndText,
-                "##timestamp_start",
-                "##timestamp_end") ||
-    wasEdited;
+                  "Timestamp",
+                  queryPanelViewModel_.enableTimestampRange,
+                  queryPanelViewModel_.timestampStartText,
+                  queryPanelViewModel_.timestampEndText,
+                  "##timestamp_start",
+                  "##timestamp_end") ||
+              wasEdited;
 
   wasEdited = renderCompactRangeInputs(
-                "Ordinal",
-                queryPanelViewModel_.enableOrdinalRange,
-                queryPanelViewModel_.ordinalStartText,
-                queryPanelViewModel_.ordinalEndText,
-                "##ordinal_start",
-                "##ordinal_end") ||
-    wasEdited;
+                  "Ordinal",
+                  queryPanelViewModel_.enableOrdinalRange,
+                  queryPanelViewModel_.ordinalStartText,
+                  queryPanelViewModel_.ordinalEndText,
+                  "##ordinal_start",
+                  "##ordinal_end") ||
+              wasEdited;
 
   if(ImGui::Checkbox("Row cap", &queryPanelViewModel_.enableResultCap))
   {
@@ -1684,8 +1677,8 @@ void GuiApplication::renderTimelinePanel()
   }
 
   ImGui::Text("Visible range: %" PRIu64 " ns to %" PRIu64 " ns",
-    timelineViewModel_.visibleStartTimestampNs(),
-    timelineViewModel_.visibleEndTimestampNs());
+              timelineViewModel_.visibleStartTimestampNs(),
+              timelineViewModel_.visibleEndTimestampNs());
 
   const auto rows = traceTableViewModel_.visibleRows();
   if(rows.empty())
@@ -1722,17 +1715,17 @@ void GuiApplication::renderTimelinePanel()
   const float minimumTimestamp = static_cast<float>(rows.front().canEvent.timestampNs);
   const float maximumTimestamp = static_cast<float>(rows.back().canEvent.timestampNs);
   float visibleRange[2] = {
-    static_cast<float>(timelineViewModel_.visibleStartTimestampNs()),
-    static_cast<float>(timelineViewModel_.visibleEndTimestampNs())};
+      static_cast<float>(timelineViewModel_.visibleStartTimestampNs()),
+      static_cast<float>(timelineViewModel_.visibleEndTimestampNs())};
   if(ImGui::DragFloatRange2(
-      "Visible window",
-      &visibleRange[0],
-      &visibleRange[1],
-      std::max(1.0F, (maximumTimestamp - minimumTimestamp) / 200.0F),
-      minimumTimestamp,
-      maximumTimestamp,
-      "Start %.0f",
-      "End %.0f"))
+         "Visible window",
+         &visibleRange[0],
+         &visibleRange[1],
+         std::max(1.0F, (maximumTimestamp - minimumTimestamp) / 200.0F),
+         minimumTimestamp,
+         maximumTimestamp,
+         "Start %.0f",
+         "End %.0f"))
   {
     queryPanelViewModel_.enableTimestampRange = true;
     queryPanelViewModel_.timestampStartText = std::to_string(static_cast<std::uint64_t>(visibleRange[0]));
@@ -1769,7 +1762,7 @@ void GuiApplication::renderTraceTablePanel()
   }
 
   ImGuiTableFlags tableFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
-    ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp;
+                               ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp;
   if(ImGui::BeginTable("trace_table", 7, tableFlags))
   {
     ImGui::TableSetupColumn("Ordinal");
@@ -1849,28 +1842,28 @@ void GuiApplication::renderSignalPanel()
   }
 
   ImGui::Text("Ordinal: %" PRIu64 " | Timestamp: %" PRIu64 " | CAN ID: %s | Channel: %u | Frame: %s",
-    selectedRow->ordinal,
-    selectedRow->canEvent.timestampNs,
-    formatCanId(selectedRow->canEvent.canId).c_str(),
-    static_cast<unsigned int>(selectedRow->canEvent.channel),
-    frameTypeLabel(selectedRow->canEvent.frameType));
+              selectedRow->ordinal,
+              selectedRow->canEvent.timestampNs,
+              formatCanId(selectedRow->canEvent.canId).c_str(),
+              static_cast<unsigned int>(selectedRow->canEvent.channel),
+              frameTypeLabel(selectedRow->canEvent.frameType));
   ImGui::TextWrapped("Payload: %s", formatPayload(selectedRow->canEvent).c_str());
 
   if(selectedRow->decodedMessage.has_value())
   {
     ImGui::Separator();
     ImGui::Text(
-      "Decoded message: %.*s",
-      static_cast<int>(selectedRow->decodedMessage->messageName.size()),
-      selectedRow->decodedMessage->messageName.data());
+        "Decoded message: %.*s",
+        static_cast<int>(selectedRow->decodedMessage->messageName.size()),
+        selectedRow->decodedMessage->messageName.data());
     for(const can_decode::DecodedSignal &decodedSignal : signalPanelViewModel_.visibleSignals())
     {
       const std::string formattedSignal = formatSignalDisplay(decodedSignal);
       ImGui::BulletText(
-        "%.*s = %s",
-        static_cast<int>(decodedSignal.name.size()),
-        decodedSignal.name.data(),
-        formattedSignal.c_str());
+          "%.*s = %s",
+          static_cast<int>(decodedSignal.name.size()),
+          decodedSignal.name.data(),
+          formattedSignal.c_str());
     }
   }
   else
@@ -1912,7 +1905,7 @@ void GuiApplication::shiftOrdinalWindow(std::int64_t delta)
 {
   const std::uint64_t startOrdinal = parseUnsignedInteger(queryPanelViewModel_.ordinalStartText).value_or(0U);
   const std::uint64_t endOrdinal = parseUnsignedInteger(queryPanelViewModel_.ordinalEndText)
-    .value_or(startOrdinal + kDefaultOrdinalWindowSize - 1U);
+                                       .value_or(startOrdinal + kDefaultOrdinalWindowSize - 1U);
   const std::uint64_t windowSize = endOrdinal >= startOrdinal ? (endOrdinal - startOrdinal + 1U) : kDefaultOrdinalWindowSize;
 
   std::int64_t nextStartOrdinal = static_cast<std::int64_t>(startOrdinal) + delta * static_cast<std::int64_t>(windowSize);
