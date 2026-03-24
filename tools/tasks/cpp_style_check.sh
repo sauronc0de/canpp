@@ -4,11 +4,18 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 
-project_root="${1:-${repo_root}}"
+default_project_root="${repo_root}"
+project_root="${1:-${default_project_root}}"
 compile_db_dir="${2:-${repo_root}/build}"
 rules_path="${repo_root}/tools/cpp_style_tool/config/rules.yaml"
 tool_path="${repo_root}/tools/cpp_style_tool/build/cpp-style-tool"
 plugin_path="${repo_root}/tools/cpp_style_tool/build/clang-tidy-module/CompanyClangTidyModule.so"
+log_path="${compile_db_dir}/cpp_style_check.log"
+
+if [ ! -d "${project_root}" ]; then
+  echo "project root directory not found: ${project_root}" >&2
+  exit 1
+fi
 
 if [ ! -x "${tool_path}" ]; then
   echo "cpp-style-tool binary not found or not executable: ${tool_path}" >&2
@@ -39,5 +46,13 @@ echo "Running C++ style checker"
 echo "Project root: ${project_root}"
 echo "Compile DB:   ${compile_db_dir}"
 echo "Rules:        ${rules_path}"
+echo "Log:          ${log_path}"
 
-"${tool_path}" "${project_root}" "${compile_db_dir}" "${rules_path}" "${plugin_path}"
+mkdir -p "${compile_db_dir}"
+
+set +e
+"${tool_path}" "${project_root}" "${compile_db_dir}" "${rules_path}" "${plugin_path}" 2>&1 | tee "${log_path}"
+tool_exit_code=${PIPESTATUS[0]}
+set -e
+
+exit "${tool_exit_code}"
