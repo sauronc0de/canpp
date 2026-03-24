@@ -82,45 +82,39 @@ private:
 class QueryPanelViewModel
 {
 public:
-  enum class CombineMode
+  enum class ClauseMode
   {
-    And,
-    Or,
+    Must,
+    Any,
+    Exclude,
   };
 
-  enum class FrameTypeSelection
+  struct FilterRuleDraft
   {
-    Any,
-    Can20,
-    CanFd,
+    can_core::FilterField field = can_core::FilterField::CanId;
+    can_core::FilterOperator filterOperator = can_core::FilterOperator::Equal;
+    ClauseMode clauseMode = ClauseMode::Must;
+    std::string valueText;
+    bool enabled = true;
   };
 
   GuiQueryState buildQueryState() const;
   [[nodiscard]] can_app::RunOptions buildRunOptions() const;
+  void resetToDefaults();
 
   std::string tracePath;
   std::string dbcPath;
-  std::string canIdText;
   std::string timestampStartText;
   std::string timestampEndText;
-  std::string channelText;
-  std::string messageNameText;
-  std::string signalNameText;
-  std::string signalValueText;
   std::string ordinalStartText = "0";
   std::string ordinalEndText = "1999";
   std::string maxRowsText = "1000";
-  FrameTypeSelection frameTypeSelection = FrameTypeSelection::Any;
-  CombineMode combineMode = CombineMode::And;
-  bool enableCanIdFilter = false;
   bool enableTimestampRange = false;
   bool enableOrdinalRange = true;
-  bool enableChannelFilter = false;
-  bool enableMessageNameFilter = false;
-  bool enableSignalNameFilter = false;
-  bool enableSignalValueFilter = false;
   bool enableResultCap = true;
   bool shouldDecodeMatches = false;
+  std::vector<FilterRuleDraft> rawRules;
+  std::vector<FilterRuleDraft> decodedRules;
 };
 
 class TimelineViewModel

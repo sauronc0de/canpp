@@ -4,6 +4,7 @@
 #include <array>
 #include <charconv>
 #include <chrono>
+#include <cctype>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
@@ -109,25 +110,276 @@ can_core::FilterExpr makePredicateExpr(
   return can_core::FilterExpr::makePredicate(std::move(predicate));
 }
 
-std::optional<can_core::FilterExpr> buildLogicalFilter(
-  QueryPanelViewModel::CombineMode combineMode,
-  std::vector<can_core::FilterExpr> filters)
+std::string trimCopy(std::string_view text)
 {
-  if(filters.empty())
+  std::size_t begin = 0U;
+  while(begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])) != 0)
+  {
+    ++begin;
+  }
+
+  std::size_t end = text.size();
+  while(end > begin && std::isspace(static_cast<unsigned char>(text[end - 1U])) != 0)
+  {
+    --end;
+  }
+
+  return std::string(text.substr(begin, end - begin));
+}
+
+bool isStringField(can_core::FilterField field)
+{
+  return field == can_core::FilterField::MessageName || field == can_core::FilterField::SignalName;
+}
+
+bool isDecodedField(can_core::FilterField field)
+{
+  return field == can_core::FilterField::MessageName || field == can_core::FilterField::SignalName ||
+    field == can_core::FilterField::SignalValue;
+}
+
+const char *filterFieldLabel(can_core::FilterField field)
+{
+  switch(field)
+  {
+  case can_core::FilterField::TimestampNs:
+    return "Timestamp";
+  case can_core::FilterField::CanId:
+    return "CAN ID";
+  case can_core::FilterField::Channel:
+    return "Channel";
+  case can_core::FilterField::FrameType:
+    return "Frame";
+  case can_core::FilterField::MessageName:
+    return "Message";
+  case can_core::FilterField::SignalName:
+    return "Signal";
+  case can_core::FilterField::SignalValue:
+    return "Signal Value";
+  }
+
+  return "Unknown";
+}
+
+const char *filterOperatorLabel(can_core::FilterOperator filterOperator)
+{
+  switch(filterOperator)
+  {
+  case can_core::FilterOperator::Equal:
+    return "=";
+  case can_core::FilterOperator::NotEqual:
+    return "!=";
+  case can_core::FilterOperator::Less:
+    return "<";
+  case can_core::FilterOperator::LessOrEqual:
+    return "<=";
+  case can_core::FilterOperator::Greater:
+    return ">";
+  case can_core::FilterOperator::GreaterOrEqual:
+    return ">=";
+  case can_core::FilterOperator::Contains:
+    return "contains";
+  }
+
+  return "?";
+}
+
+can_core::FilterOperator defaultFilterOperator(can_core::FilterField field)
+{
+  return isStringField(field) ? can_core::FilterOperator::Contains : can_core::FilterOperator::Equal;
+}
+
+std::optional<can_core::FilterValue> parseFilterValue(can_core::FilterField field, std::string_view valueText)
+{
+  const std::string trimmedValue = trimCopy(valueText);
+  if(trimmedValue.empty())
   {
     return std::nullopt;
   }
 
-  if(filters.size() == 1U)
+  switch(field)
   {
-    return filters.front();
+  case can_core::FilterField::TimestampNs:
+  case can_core::FilterField::CanId:
+  case can_core::FilterField::Channel:
+    return parseUnsignedInteger(trimmedValue);
+  case can_core::FilterField::FrameType:
+  {
+    std::string lowerValue = trimmedValue;
+    std::transform(lowerValue.begin(), lowerValue.end(), lowerValue.begin(), [](unsigned char character) {
+      return static_cast<char>(std::tolower(character));
+    });
+    if(lowerValue == "can" || lowerValue == "can20" || lowerValue == "2.0")
+    {
+      return static_cast<std::uint64_t>(static_cast<std::uint8_t>(can_core::FrameType::Can20));
+    }
+    if(lowerValue == "fd" || lowerValue == "canfd" || lowerValue == "can fd")
+    {
+      return static_cast<std::uint64_t>(static_cast<std::uint8_t>(can_core::FrameType::CanFd));
+    }
+    return std::nullopt;
+  }
+  case can_core::FilterField::MessageName:
+  case can_core::FilterField::SignalName:
+    return trimmedValue;
+  case can_core::FilterField::SignalValue:
+    return parseDouble(trimmedValue);
+  }
+
+  return std::nullopt;
+}
+
+struct ExpandedRuleClause
+{
+  QueryPanelViewModel::ClauseMode clauseMode = QueryPanelViewModel::ClauseMode::Must;
+  std::string valueText;
+};
+
+std::vector<ExpandedRuleClause> expandRuleClauses(const QueryPanelViewModel::FilterRuleDraft &rule)
+{
+  std::vector<ExpandedRuleClause> expandedClauses;
+  const std::string trimmedValue = trimCopy(rule.valueText);
+  if(trimmedValue.empty())
+  {
+    return expandedClauses;
+  }
+
+  if(trimmedValue.find('&') == std::string::npos && trimmedValue.find('|') == std::string::npos &&
+    trimmedValue.find(',') == std::string::npos)
+  {
+    expandedClauses.push_back({rule.clauseMode, trimmedValue});
+    return expandedClauses;
+  }
+
+  const bool containsAnd = trimmedValue.find('&') != std::string::npos;
+  const bool containsOr = trimmedValue.find('|') != std::string::npos || trimmedValue.find(',') != std::string::npos;
+  if(containsAnd && containsOr)
+  {
+    expandedClauses.push_back({rule.clauseMode, trimmedValue});
+    return expandedClauses;
+  }
+
+  QueryPanelViewModel::ClauseMode defaultMode = rule.clauseMode;
+  if(containsOr && rule.clauseMode != QueryPanelViewModel::ClauseMode::Exclude)
+  {
+    defaultMode = QueryPanelViewModel::ClauseMode::Any;
+  }
+
+  std::size_t tokenStart = 0U;
+  const auto flushToken = [&](std::size_t tokenEnd)
+  {
+    std::string token = trimCopy(std::string_view(trimmedValue).substr(tokenStart, tokenEnd - tokenStart));
+    if(token.empty())
+    {
+      return;
+    }
+
+    QueryPanelViewModel::ClauseMode tokenMode = defaultMode;
+    if(!token.empty() && (token.front() == '!' || token.front() == '-'))
+    {
+      tokenMode = QueryPanelViewModel::ClauseMode::Exclude;
+      token.erase(token.begin());
+      token = trimCopy(token);
+    }
+
+    if(!token.empty())
+    {
+      expandedClauses.push_back({tokenMode, std::move(token)});
+    }
+  };
+
+  for(std::size_t index = 0U; index < trimmedValue.size(); ++index)
+  {
+    const char character = trimmedValue[index];
+    if(character == '&' || character == '|' || character == ',')
+    {
+      flushToken(index);
+      tokenStart = index + 1U;
+    }
+  }
+  flushToken(trimmedValue.size());
+  return expandedClauses;
+}
+
+std::optional<can_core::FilterExpr> buildRuleFilter(
+  const std::vector<QueryPanelViewModel::FilterRuleDraft> &rules,
+  bool *requiresDecode = nullptr)
+{
+  std::vector<can_core::FilterExpr> mustClauses;
+  std::vector<can_core::FilterExpr> anyClauses;
+  std::vector<can_core::FilterExpr> excludeClauses;
+
+  for(const QueryPanelViewModel::FilterRuleDraft &rule : rules)
+  {
+    if(!rule.enabled)
+    {
+      continue;
+    }
+
+    for(const ExpandedRuleClause &expandedClause : expandRuleClauses(rule))
+    {
+      const auto parsedValue = parseFilterValue(rule.field, expandedClause.valueText);
+      if(!parsedValue.has_value())
+      {
+        continue;
+      }
+
+      if(requiresDecode != nullptr && isDecodedField(rule.field))
+      {
+        *requiresDecode = true;
+      }
+
+      can_core::FilterExpr predicateExpr = makePredicateExpr(rule.field, rule.filterOperator, *parsedValue);
+      switch(expandedClause.clauseMode)
+      {
+      case QueryPanelViewModel::ClauseMode::Must:
+        mustClauses.push_back(std::move(predicateExpr));
+        break;
+      case QueryPanelViewModel::ClauseMode::Any:
+        anyClauses.push_back(std::move(predicateExpr));
+        break;
+      case QueryPanelViewModel::ClauseMode::Exclude:
+      {
+        can_core::FilterExpr notExpr;
+        notExpr.logicalOperator = can_core::LogicalOperator::Not;
+        notExpr.children.push_back(std::move(predicateExpr));
+        excludeClauses.push_back(std::move(notExpr));
+        break;
+      }
+      }
+    }
+  }
+
+  std::vector<can_core::FilterExpr> children;
+  children.reserve(mustClauses.size() + excludeClauses.size() + (anyClauses.empty() ? 0U : 1U));
+  for(can_core::FilterExpr &mustClause : mustClauses)
+  {
+    children.push_back(std::move(mustClause));
+  }
+  if(!anyClauses.empty())
+  {
+    can_core::FilterExpr orExpr;
+    orExpr.logicalOperator = can_core::LogicalOperator::Or;
+    orExpr.children = std::move(anyClauses);
+    children.push_back(std::move(orExpr));
+  }
+  for(can_core::FilterExpr &excludeClause : excludeClauses)
+  {
+    children.push_back(std::move(excludeClause));
+  }
+
+  if(children.empty())
+  {
+    return std::nullopt;
+  }
+  if(children.size() == 1U)
+  {
+    return std::move(children.front());
   }
 
   can_core::FilterExpr filterExpr;
-  filterExpr.logicalOperator = combineMode == QueryPanelViewModel::CombineMode::And
-    ? can_core::LogicalOperator::And
-    : can_core::LogicalOperator::Or;
-  filterExpr.children = std::move(filters);
+  filterExpr.logicalOperator = can_core::LogicalOperator::And;
+  filterExpr.children = std::move(children);
   return filterExpr;
 }
 
@@ -227,6 +479,195 @@ void textUnformatted(std::string_view text)
 [[maybe_unused]] bool isCompatibleDbcExtension(const std::filesystem::path &path)
 {
   return lowerExtension(path) == ".dbc";
+}
+
+std::span<const can_core::FilterField> availableRawFields()
+{
+  static constexpr std::array<can_core::FilterField, 4> fields = {
+    can_core::FilterField::CanId,
+    can_core::FilterField::TimestampNs,
+    can_core::FilterField::Channel,
+    can_core::FilterField::FrameType,
+  };
+  return fields;
+}
+
+std::span<const can_core::FilterField> availableDecodedFields()
+{
+  static constexpr std::array<can_core::FilterField, 3> fields = {
+    can_core::FilterField::MessageName,
+    can_core::FilterField::SignalName,
+    can_core::FilterField::SignalValue,
+  };
+  return fields;
+}
+
+std::span<const can_core::FilterOperator> availableOperators(can_core::FilterField field)
+{
+  static constexpr std::array<can_core::FilterOperator, 6> numericOperators = {
+    can_core::FilterOperator::Equal,
+    can_core::FilterOperator::NotEqual,
+    can_core::FilterOperator::Less,
+    can_core::FilterOperator::LessOrEqual,
+    can_core::FilterOperator::Greater,
+    can_core::FilterOperator::GreaterOrEqual,
+  };
+  static constexpr std::array<can_core::FilterOperator, 3> stringOperators = {
+    can_core::FilterOperator::Contains,
+    can_core::FilterOperator::Equal,
+    can_core::FilterOperator::NotEqual,
+  };
+  return isStringField(field) ? std::span<const can_core::FilterOperator>(stringOperators)
+                              : std::span<const can_core::FilterOperator>(numericOperators);
+}
+
+int fieldIndexFor(can_core::FilterField field, std::span<const can_core::FilterField> fields)
+{
+  for(std::size_t index = 0U; index < fields.size(); ++index)
+  {
+    if(fields[index] == field)
+    {
+      return static_cast<int>(index);
+    }
+  }
+  return 0;
+}
+
+int operatorIndexFor(can_core::FilterOperator filterOperator, std::span<const can_core::FilterOperator> operators)
+{
+  for(std::size_t index = 0U; index < operators.size(); ++index)
+  {
+    if(operators[index] == filterOperator)
+    {
+      return static_cast<int>(index);
+    }
+  }
+  return 0;
+}
+
+bool renderRuleEditor(
+  const char *sectionId,
+  const char *emptyLabel,
+  std::vector<QueryPanelViewModel::FilterRuleDraft> &rules,
+  std::span<const can_core::FilterField> availableFields)
+{
+  bool wasEdited = false;
+  ImGui::PushID(sectionId);
+
+  if(rules.empty())
+  {
+    ImGui::TextDisabled("%s", emptyLabel);
+  }
+
+  for(std::size_t index = 0U; index < rules.size(); ++index)
+  {
+    QueryPanelViewModel::FilterRuleDraft &rule = rules[index];
+    ImGui::PushID(static_cast<int>(index));
+
+    if(ImGui::Checkbox("##enabled", &rule.enabled))
+    {
+      wasEdited = true;
+    }
+    ImGui::SameLine();
+
+    const char *clauseLabels[] = {"Show", "Any Of", "Hide"};
+    int clauseModeIndex = static_cast<int>(rule.clauseMode);
+    ImGui::SetNextItemWidth(90.0F);
+    if(ImGui::Combo("##mode", &clauseModeIndex, clauseLabels, IM_ARRAYSIZE(clauseLabels)))
+    {
+      rule.clauseMode = static_cast<QueryPanelViewModel::ClauseMode>(clauseModeIndex);
+      wasEdited = true;
+    }
+    ImGui::SameLine();
+
+    int fieldIndex = fieldIndexFor(rule.field, availableFields);
+    std::vector<const char *> fieldLabels;
+    fieldLabels.reserve(availableFields.size());
+    for(const can_core::FilterField field : availableFields)
+    {
+      fieldLabels.push_back(filterFieldLabel(field));
+    }
+    ImGui::SetNextItemWidth(115.0F);
+    if(ImGui::Combo("##field", &fieldIndex, fieldLabels.data(), static_cast<int>(fieldLabels.size())))
+    {
+      rule.field = availableFields[static_cast<std::size_t>(fieldIndex)];
+      rule.filterOperator = defaultFilterOperator(rule.field);
+      wasEdited = true;
+    }
+    ImGui::SameLine();
+
+    const auto operators = availableOperators(rule.field);
+    std::vector<const char *> operatorLabels;
+    operatorLabels.reserve(operators.size());
+    for(const can_core::FilterOperator filterOperator : operators)
+    {
+      operatorLabels.push_back(filterOperatorLabel(filterOperator));
+    }
+    int operatorIndex = operatorIndexFor(rule.filterOperator, operators);
+    ImGui::SetNextItemWidth(90.0F);
+    if(ImGui::Combo("##operator", &operatorIndex, operatorLabels.data(), static_cast<int>(operatorLabels.size())))
+    {
+      rule.filterOperator = operators[static_cast<std::size_t>(operatorIndex)];
+      wasEdited = true;
+    }
+    ImGui::SameLine();
+
+    ImGui::SetNextItemWidth(-34.0F);
+    if(inputText("##value", rule.valueText))
+    {
+      wasEdited = true;
+    }
+    ImGui::SameLine();
+    if(ImGui::Button("X"))
+    {
+      rules.erase(rules.begin() + static_cast<std::ptrdiff_t>(index));
+      ImGui::PopID();
+      ImGui::PopID();
+      return true;
+    }
+    ImGui::PopID();
+  }
+
+  if(ImGui::Button((std::string("Add Rule##") + sectionId).c_str()))
+  {
+    const can_core::FilterField defaultField = availableFields.empty() ? can_core::FilterField::CanId : availableFields.front();
+    rules.push_back({defaultField, defaultFilterOperator(defaultField), QueryPanelViewModel::ClauseMode::Must, "", true});
+    wasEdited = true;
+  }
+  ImGui::PopID();
+  return wasEdited;
+}
+
+bool renderCompactRangeInputs(
+  const char *label,
+  bool &enabled,
+  std::string &startValue,
+  std::string &endValue,
+  const char *startHint,
+  const char *endHint)
+{
+  bool wasEdited = false;
+  if(ImGui::Checkbox(label, &enabled))
+  {
+    wasEdited = true;
+  }
+  ImGui::SameLine();
+  ImGui::BeginDisabled(!enabled);
+  ImGui::SetNextItemWidth(110.0F);
+  if(inputText(startHint, startValue))
+  {
+    wasEdited = true;
+  }
+  ImGui::SameLine();
+  ImGui::TextUnformatted("to");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(110.0F);
+  if(inputText(endHint, endValue))
+  {
+    wasEdited = true;
+  }
+  ImGui::EndDisabled();
+  return wasEdited;
 }
 } // namespace
 
@@ -372,19 +813,10 @@ bool TraceTableViewModel::wasLastRefreshCancelled() const
 GuiQueryState QueryPanelViewModel::buildQueryState() const
 {
   GuiQueryState guiQueryState;
-  guiQueryState.querySpec.shouldDecode =
-    shouldDecodeMatches || enableMessageNameFilter || enableSignalNameFilter || enableSignalValueFilter;
+  bool requiresDecode = false;
+  guiQueryState.querySpec.shouldDecode = shouldDecodeMatches;
   guiQueryState.querySpec.shouldReturnRaw = true;
-
-  std::vector<can_core::FilterExpr> rawFilters;
-  if(enableCanIdFilter)
-  {
-    const auto canId = parseUnsignedInteger(canIdText);
-    if(canId.has_value())
-    {
-      rawFilters.push_back(makePredicateExpr(can_core::FilterField::CanId, can_core::FilterOperator::Equal, *canId));
-    }
-  }
+  std::vector<FilterRuleDraft> effectiveRawRules = rawRules;
 
   if(enableTimestampRange)
   {
@@ -392,28 +824,23 @@ GuiQueryState QueryPanelViewModel::buildQueryState() const
     const auto timestampEnd = parseUnsignedInteger(timestampEndText);
     if(timestampStart.has_value())
     {
-      rawFilters.push_back(makePredicateExpr(
-        can_core::FilterField::TimestampNs,
-        can_core::FilterOperator::GreaterOrEqual,
-        *timestampStart));
+      effectiveRawRules.push_back(
+        {can_core::FilterField::TimestampNs,
+         can_core::FilterOperator::GreaterOrEqual,
+         ClauseMode::Must,
+         std::to_string(*timestampStart),
+         true});
       guiQueryState.visibleStartTimestampNs = *timestampStart;
     }
     if(timestampEnd.has_value())
     {
-      rawFilters.push_back(makePredicateExpr(
-        can_core::FilterField::TimestampNs,
-        can_core::FilterOperator::LessOrEqual,
-        *timestampEnd));
+      effectiveRawRules.push_back(
+        {can_core::FilterField::TimestampNs,
+         can_core::FilterOperator::LessOrEqual,
+         ClauseMode::Must,
+         std::to_string(*timestampEnd),
+         true});
       guiQueryState.visibleEndTimestampNs = *timestampEnd;
-    }
-  }
-
-  if(enableChannelFilter)
-  {
-    const auto channel = parseUnsignedInteger(channelText);
-    if(channel.has_value())
-    {
-      rawFilters.push_back(makePredicateExpr(can_core::FilterField::Channel, can_core::FilterOperator::Equal, *channel));
     }
   }
 
@@ -429,54 +856,12 @@ GuiQueryState QueryPanelViewModel::buildQueryState() const
     }
   }
 
-  if(frameTypeSelection == FrameTypeSelection::Can20)
-  {
-    rawFilters.push_back(makePredicateExpr(
-      can_core::FilterField::FrameType,
-      can_core::FilterOperator::Equal,
-      static_cast<std::uint64_t>(static_cast<std::uint8_t>(can_core::FrameType::Can20))));
-  }
-  else if(frameTypeSelection == FrameTypeSelection::CanFd)
-  {
-    rawFilters.push_back(makePredicateExpr(
-      can_core::FilterField::FrameType,
-      can_core::FilterOperator::Equal,
-      static_cast<std::uint64_t>(static_cast<std::uint8_t>(can_core::FrameType::CanFd))));
-  }
-
-  if(const auto rawFilter = buildLogicalFilter(combineMode, std::move(rawFilters)); rawFilter.has_value())
+  if(const auto rawFilter = buildRuleFilter(effectiveRawRules, &requiresDecode); rawFilter.has_value())
   {
     guiQueryState.querySpec.rawFilter = *rawFilter;
   }
-
-  std::vector<can_core::FilterExpr> decodedFilters;
-  if(enableMessageNameFilter && !messageNameText.empty())
-  {
-    decodedFilters.push_back(makePredicateExpr(
-      can_core::FilterField::MessageName,
-      can_core::FilterOperator::Contains,
-      messageNameText));
-  }
-  if(enableSignalNameFilter && !signalNameText.empty())
-  {
-    decodedFilters.push_back(makePredicateExpr(
-      can_core::FilterField::SignalName,
-      can_core::FilterOperator::Contains,
-      signalNameText));
-  }
-  if(enableSignalValueFilter)
-  {
-    const auto signalValue = parseDouble(signalValueText);
-    if(signalValue.has_value())
-    {
-      decodedFilters.push_back(makePredicateExpr(
-        can_core::FilterField::SignalValue,
-        can_core::FilterOperator::Equal,
-        *signalValue));
-    }
-  }
-
-  guiQueryState.querySpec.decodedFilter = buildLogicalFilter(combineMode, std::move(decodedFilters));
+  guiQueryState.querySpec.decodedFilter = buildRuleFilter(decodedRules, &requiresDecode);
+  guiQueryState.querySpec.shouldDecode = guiQueryState.querySpec.shouldDecode || requiresDecode;
   return guiQueryState;
 }
 
@@ -502,6 +887,15 @@ can_app::RunOptions QueryPanelViewModel::buildRunOptions() const
     }
   }
   return runOptions;
+}
+
+void QueryPanelViewModel::resetToDefaults()
+{
+  rawRules.clear();
+  decodedRules.clear();
+  rawRules.push_back({can_core::FilterField::CanId, can_core::FilterOperator::Equal, ClauseMode::Must, "", true});
+  decodedRules.push_back(
+    {can_core::FilterField::MessageName, can_core::FilterOperator::Contains, ClauseMode::Must, "", true});
 }
 
 void TimelineViewModel::setVisibleRange(std::uint64_t visibleStartTimestampNs, std::uint64_t visibleEndTimestampNs)
@@ -600,6 +994,7 @@ std::span<const can_decode::DecodedSignal> SignalPanelViewModel::visibleSignals(
 GuiApplication::GuiApplication(std::vector<std::string> arguments)
   : arguments_(std::move(arguments))
 {
+  queryPanelViewModel_.resetToDefaults();
   if(arguments_.size() > 1U)
   {
     queryPanelViewModel_.tracePath = arguments_[1];
@@ -725,6 +1120,11 @@ void GuiApplication::render()
 
 bool GuiApplication::initialize()
 {
+  if(queryPanelViewModel_.rawRules.empty() && queryPanelViewModel_.decodedRules.empty())
+  {
+    queryPanelViewModel_.resetToDefaults();
+  }
+
   if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
   {
     guiSession_.statusMessage = std::string("SDL initialization failed: ") + SDL_GetError();
@@ -745,12 +1145,13 @@ bool GuiApplication::initialize()
     SDL_WINDOWPOS_CENTERED,
     kWindowWidth,
     kWindowHeight,
-    SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
   if(g_window == nullptr)
   {
     guiSession_.statusMessage = std::string("Window creation failed: ") + SDL_GetError();
     return false;
   }
+  SDL_MaximizeWindow(g_window);
 
   g_glContext = SDL_GL_CreateContext(g_window);
   if(g_glContext == nullptr)
@@ -860,8 +1261,8 @@ void GuiApplication::refreshResults()
     return;
   }
 
-  if((queryPanelViewModel_.enableMessageNameFilter || queryPanelViewModel_.enableSignalNameFilter ||
-      queryPanelViewModel_.enableSignalValueFilter || queryPanelViewModel_.shouldDecodeMatches) &&
+  const GuiQueryState draftQueryState = queryPanelViewModel_.buildQueryState();
+  if((draftQueryState.querySpec.decodedFilter.has_value() || draftQueryState.querySpec.shouldDecode) &&
     queryPanelViewModel_.dbcPath.empty())
   {
     guiSession_.statusMessage = "A DBC path is required for decoded queries or decoded result display.";
@@ -873,7 +1274,7 @@ void GuiApplication::refreshResults()
   {
     traceTableViewModel_.cancelRefresh();
   }
-  traceTableViewModel_.startRefresh(guiSession_.queryState.querySpec);
+  traceTableViewModel_.startRefresh(draftQueryState.querySpec);
   guiSession_.statusMessage = "Query running for the current scope...";
   isRefreshPending_ = false;
 }
@@ -930,7 +1331,7 @@ void GuiApplication::renderOverviewPanel()
 void GuiApplication::renderQueryPanel()
 {
   ImGui::SetNextWindowPos(ImVec2(16.0F, 230.0F), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowSize(ImVec2(520.0F, 620.0F), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(520.0F, 610.0F), ImGuiCond_FirstUseEver);
   if(!ImGui::Begin("Query Builder"))
   {
     ImGui::End();
@@ -1000,20 +1401,12 @@ void GuiApplication::renderQueryPanel()
   }
 #endif
 
+  ImGui::SetNextItemWidth(-1.0F);
   wasEdited = inputText("Trace path", queryPanelViewModel_.tracePath) || wasEdited;
+  ImGui::SetNextItemWidth(-1.0F);
   wasEdited = inputText("DBC path", queryPanelViewModel_.dbcPath) || wasEdited;
 
-  ImGui::SeparatorText("Composition");
-  const char *combineModeLabels[] = {"AND", "OR"};
-  int combineModeIndex = queryPanelViewModel_.combineMode == QueryPanelViewModel::CombineMode::And ? 0 : 1;
-  if(ImGui::Combo("Combine rules", &combineModeIndex, combineModeLabels, IM_ARRAYSIZE(combineModeLabels)))
-  {
-    queryPanelViewModel_.combineMode = combineModeIndex == 0
-      ? QueryPanelViewModel::CombineMode::And
-      : QueryPanelViewModel::CombineMode::Or;
-    wasEdited = true;
-  }
-
+  ImGui::SeparatorText("Execution");
   if(ImGui::Checkbox("Decode matches", &queryPanelViewModel_.shouldDecodeMatches))
   {
     wasEdited = true;
@@ -1024,59 +1417,60 @@ void GuiApplication::renderQueryPanel()
     wasEdited = true;
   }
 
-  ImGui::SeparatorText("Raw filters");
-  if(ImGui::Checkbox("CAN ID", &queryPanelViewModel_.enableCanIdFilter))
-  {
-    wasEdited = true;
-  }
-  ImGui::SameLine();
-  ImGui::BeginDisabled(!queryPanelViewModel_.enableCanIdFilter);
-  wasEdited = inputText("##can_id", queryPanelViewModel_.canIdText) || wasEdited;
-  ImGui::EndDisabled();
+  ImGui::SeparatorText("Rules");
+  ImGui::TextDisabled("Show=require, Any Of=OR group, Hide=NOT. Text examples: RLS_01 & KL15, RLS_01 | KL15, RLS_01 & !KL15");
 
-  if(ImGui::Checkbox("Timestamp range", &queryPanelViewModel_.enableTimestampRange))
+  const std::string rawHeader = "Raw Trace Rules (" + std::to_string(queryPanelViewModel_.rawRules.size()) + ")";
+  if(ImGui::CollapsingHeader(rawHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
   {
-    wasEdited = true;
+    wasEdited = renderRuleEditor("raw", "No raw rules yet.", queryPanelViewModel_.rawRules, availableRawFields()) || wasEdited;
+    ImGui::Spacing();
   }
-  ImGui::BeginDisabled(!queryPanelViewModel_.enableTimestampRange);
-  wasEdited = inputText("Start ns", queryPanelViewModel_.timestampStartText) || wasEdited;
-  wasEdited = inputText("End ns", queryPanelViewModel_.timestampEndText) || wasEdited;
-  ImGui::EndDisabled();
 
-  if(ImGui::Checkbox("Ordinal range", &queryPanelViewModel_.enableOrdinalRange))
+  const std::string decodedHeader = "Decoded Rules (" + std::to_string(queryPanelViewModel_.decodedRules.size()) + ")";
+  if(ImGui::CollapsingHeader(decodedHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
   {
-    wasEdited = true;
+    wasEdited = renderRuleEditor(
+                  "decoded",
+                  "No decoded rules yet.",
+                  queryPanelViewModel_.decodedRules,
+                  availableDecodedFields()) ||
+      wasEdited;
+    ImGui::Spacing();
   }
-  ImGui::BeginDisabled(!queryPanelViewModel_.enableOrdinalRange);
-  wasEdited = inputText("Start ordinal", queryPanelViewModel_.ordinalStartText) || wasEdited;
-  wasEdited = inputText("End ordinal", queryPanelViewModel_.ordinalEndText) || wasEdited;
-  ImGui::EndDisabled();
 
-  if(ImGui::Checkbox("Channel", &queryPanelViewModel_.enableChannelFilter))
+  if(ImGui::Button("Reset Rules"))
   {
-    wasEdited = true;
-  }
-  ImGui::SameLine();
-  ImGui::BeginDisabled(!queryPanelViewModel_.enableChannelFilter);
-  wasEdited = inputText("##channel", queryPanelViewModel_.channelText) || wasEdited;
-  ImGui::EndDisabled();
-
-  const char *frameTypeLabels[] = {"Any", "CAN 2.0", "CAN FD"};
-  int frameTypeIndex = static_cast<int>(queryPanelViewModel_.frameTypeSelection);
-  if(ImGui::Combo("Frame type", &frameTypeIndex, frameTypeLabels, IM_ARRAYSIZE(frameTypeLabels)))
-  {
-    queryPanelViewModel_.frameTypeSelection =
-      static_cast<QueryPanelViewModel::FrameTypeSelection>(frameTypeIndex);
+    queryPanelViewModel_.resetToDefaults();
     wasEdited = true;
   }
 
-  ImGui::SeparatorText("Result window");
+  ImGui::SeparatorText("Window");
+  wasEdited = renderCompactRangeInputs(
+                "Timestamp",
+                queryPanelViewModel_.enableTimestampRange,
+                queryPanelViewModel_.timestampStartText,
+                queryPanelViewModel_.timestampEndText,
+                "##timestamp_start",
+                "##timestamp_end") ||
+    wasEdited;
+
+  wasEdited = renderCompactRangeInputs(
+                "Ordinal",
+                queryPanelViewModel_.enableOrdinalRange,
+                queryPanelViewModel_.ordinalStartText,
+                queryPanelViewModel_.ordinalEndText,
+                "##ordinal_start",
+                "##ordinal_end") ||
+    wasEdited;
+
   if(ImGui::Checkbox("Row cap", &queryPanelViewModel_.enableResultCap))
   {
     wasEdited = true;
   }
   ImGui::SameLine();
   ImGui::BeginDisabled(!queryPanelViewModel_.enableResultCap);
+  ImGui::SetNextItemWidth(120.0F);
   wasEdited = inputText("##max_rows", queryPanelViewModel_.maxRowsText) || wasEdited;
   ImGui::EndDisabled();
 
@@ -1097,34 +1491,6 @@ void GuiApplication::renderQueryPanel()
     queryPanelViewModel_.ordinalEndText = std::to_string(kDefaultOrdinalWindowSize - 1U);
     markRefreshNeeded();
   }
-
-  ImGui::SeparatorText("Decoded filters");
-  if(ImGui::Checkbox("Message name", &queryPanelViewModel_.enableMessageNameFilter))
-  {
-    wasEdited = true;
-  }
-  ImGui::SameLine();
-  ImGui::BeginDisabled(!queryPanelViewModel_.enableMessageNameFilter);
-  wasEdited = inputText("##message_name", queryPanelViewModel_.messageNameText) || wasEdited;
-  ImGui::EndDisabled();
-
-  if(ImGui::Checkbox("Signal name", &queryPanelViewModel_.enableSignalNameFilter))
-  {
-    wasEdited = true;
-  }
-  ImGui::SameLine();
-  ImGui::BeginDisabled(!queryPanelViewModel_.enableSignalNameFilter);
-  wasEdited = inputText("##signal_name", queryPanelViewModel_.signalNameText) || wasEdited;
-  ImGui::EndDisabled();
-
-  if(ImGui::Checkbox("Signal value", &queryPanelViewModel_.enableSignalValueFilter))
-  {
-    wasEdited = true;
-  }
-  ImGui::SameLine();
-  ImGui::BeginDisabled(!queryPanelViewModel_.enableSignalValueFilter);
-  wasEdited = inputText("##signal_value", queryPanelViewModel_.signalValueText) || wasEdited;
-  ImGui::EndDisabled();
 
   ImGui::Spacing();
   if(ImGui::Button("Run Query", ImVec2(-1.0F, 0.0F)))
