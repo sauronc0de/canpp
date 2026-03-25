@@ -56,8 +56,8 @@ sudo apt-get install -y lld
 # ccache --set-config=cache_dir=/ccache --max-size=8G
 
 # # Add directories to PATH
-# export PATH="$PATH:$WORKSPACE_DIR/tools/tasks"
-# export PATH="$PATH:$WORKSPACE_DIR/tools/programs"
+export PATH="$PATH:$WORKSPACE_DIR/tools/tasks"
+export PATH="$PATH:$WORKSPACE_DIR/tools/programs"
 
 # End of script
 echo "Setup complete!"

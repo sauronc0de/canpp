@@ -7,6 +7,14 @@
       "PROJECT_NAME": "${localWorkspaceFolderBasename}"
     }
   },
+  "containerEnv": {
+    "ENGRAM_DATA_DIR": "${containerWorkspaceFolder}/.engram" // Path where the Engram database is stored. Should be located inside the workspace folder so data persists across container rebuilds.
+  },
+  "mounts": [
+    // Load OpenCode credentials and settings from host.
+    "source=${localEnv:HOME}/.local/share/opencode,target=/home/sauroncode/.local/share/opencode,type=bind",
+    "source=${localEnv:HOME}/.config/opencode,target=/home/sauroncode/.config/opencode,type=bind"
+  ],
   "postStartCommand": "sudo chown -R sauroncode:sauroncode /workspaces/${localWorkspaceFolderBasename} && chmod +x .devcontainer/docker_entrypoint.sh && .devcontainer/docker_entrypoint.sh",
   "customizations": {
     "vscode": {

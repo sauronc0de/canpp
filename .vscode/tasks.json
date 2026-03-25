@@ -37,6 +37,21 @@
                 "clear": true
             },
             "problemMatcher": []
+        },
+        {
+            "label": "run_opencode_web_gui.sh",
+            "type": "shell",
+            "command": "run_opencode_web_gui.sh",
+            "detail": "Open OpenCode Web UI on port 4096",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
         }
     ]
 }

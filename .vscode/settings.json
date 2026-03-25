@@ -101,6 +101,17 @@
                 "color": "#FFC107",
                 "singleInstance": true,
                 "command": "dependences.sh"
+            },
+            {
+                "cwd": "", // Terminal initial folder ${workspaceFolder} and os user home as defaults
+                "name": "🌐 OC Web",
+                "color": "#3F51B5",
+                "singleInstance": true,
+                "useVsCodeApi": true,
+                "command": "workbench.action.tasks.runTask",
+                "args": [
+                    "run_opencode_web_gui.sh"
+                ]
             }
         ],
     },
