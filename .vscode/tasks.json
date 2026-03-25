@@ -22,8 +22,8 @@
             }
         },
         {
-            "label": "cpp_style_check.sh",
-            "command": "cpp_style_check.sh",
+            "label": "checker",
+            "command": "checker",
             "type": "shell",
             "args": [
                 "${workspaceFolder}"

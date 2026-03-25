@@ -1,0 +1,80 @@
+checks:
+  company-file-snake-case:
+    rule_id: "1.1"
+    enabled: true
+    severity: error
+
+  company-class-pascal-case:
+    rule_id: "2.1"
+    enabled: true
+    severity: error
+
+  company-struct-pascal-case:
+    rule_id: "3.1"
+    enabled: true
+    severity: error
+
+  company-enum-pascal-case:
+    rule_id: "4.1"
+    enabled: true
+    severity: error
+
+  company-enum-value-pascal-case:
+    rule_id: "4.2"
+    enabled: true
+    severity: warning
+
+  company-function-camel-case:
+    rule_id: "5.1"
+    enabled: true
+    severity: error
+
+  company-variable-camel-case:
+    rule_id: "6.1"
+    enabled: true
+    severity: warning
+
+  company-member-trailing-underscore:
+    rule_id: "7.1"
+    enabled: true
+    severity: warning
+
+  company-constant-k-prefix:
+    rule_id: "8.1"
+    enabled: true
+    severity: error
+
+  company-global-g-prefix:
+    rule_id: "9.1"
+    enabled: true
+    severity: warning
+
+  company-namespace-snake-case:
+    rule_id: "10.1"
+    enabled: true
+    severity: error
+
+  company-template-parameter-pascal-case:
+    rule_id: "11.1"
+    enabled: true
+    severity: warning
+
+  company-bool-prefix:
+    rule_id: "12.1"
+    enabled: true
+    severity: warning
+
+  company-include-order:
+    rule_id: "13.1"
+    enabled: true
+    severity: warning
+
+  company-no-using-namespace-std:
+    rule_id: "14.1"
+    enabled: true
+    severity: error
+
+  company-constructor-init-list:
+    rule_id: "16.1"
+    enabled: true
+    severity: warning

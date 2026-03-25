@@ -86,13 +86,13 @@
             },
             {
                 "cwd": "", // Terminal initial folder ${workspaceFolder} and os user home as defaults
-                "name": "🔎 C++ Style",
+                "name": "🔎 Checker",
                 "color": "#00BCD4",
                 "singleInstance": true,
                 "useVsCodeApi": true,
                 "command": "workbench.action.tasks.runTask",
                 "args": [
-                    "cpp_style_check.sh"
+                    "checker"
                 ]
             },
             {
