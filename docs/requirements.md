@@ -136,6 +136,12 @@ The system shall consist of:
 - GUI-REQ-001: The system shall provide a GUI based on Dear ImGui.
 - GUI-REQ-002: The GUI shall allow loading trace files.
 - GUI-REQ-003: The GUI shall allow applying filters interactively.
+- GUI-REQ-003a: The GUI shall provide an explicit action to scan the selected trace file into an in-memory row dataset.
+- GUI-REQ-003b: The GUI shall retain the full scanned row dataset in RAM until the user requests a new scan.
+- GUI-REQ-003c: When DBC decode is enabled for the scan action, the GUI shall retain decoded message and signal information in the in-memory row dataset.
+- GUI-REQ-003d: The GUI shall support applying the current filter draft against the full in-memory row dataset without rereading the trace file.
+- GUI-REQ-003e: The GUI shall support refining the current match set by applying additional filters against the current match rows only.
+- GUI-REQ-003f: The GUI shall support resetting filters so the displayed rows return to the full in-memory row dataset.
 - GUI-REQ-004: The GUI shall display raw CAN frames.
 - GUI-REQ-005: The GUI shall display decoded signals.
 - GUI-REQ-006: The GUI shall support searching by CAN ID.
@@ -150,10 +156,12 @@ The system shall consist of:
 - GUI-REQ-015: The GUI shall allow filtering data based on distinct values of a selected column.
 - GUI-REQ-016: The GUI shall allow selecting which values of a column are visible or hidden.
 - GUI-REQ-017: The GUI shall update displayed results dynamically when search or filter criteria are modified.
+- GUI-REQ-017a: Auto-refresh in the GUI shall reapply filters from the in-memory full row dataset and shall not reread the trace file.
 - GUI-REQ-018: The GUI shall display available distinct values for a selected column to support user filtering.
 - GUI-REQ-019: The GUI shall support navigation of the trace data along a time axis.
 - GUI-REQ-020: The GUI shall allow the user to move forward and backward in time within the trace.
 - GUI-REQ-021: The GUI shall allow zooming in and out of the time axis.
+- GUI-REQ-022: The GUI shall show a temporary visual status message that distinguishes file-reading actions from in-memory filtering actions.
 
 ## 4.10 Extensibility and Scripting
 - EXT-REQ-001: The system shall provide a scripting interface for user-defined data processing.

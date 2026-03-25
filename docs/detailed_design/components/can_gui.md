@@ -10,6 +10,7 @@ Provide the future interactive frontend over the same application services.
 - bind user interactions to query and navigation requests
 - display raw and decoded data
 - manage time navigation and filtering UX
+- manage a full in-memory scanned row dataset and a separate current-match dataset
 
 ## Main Public Types
 
@@ -27,7 +28,8 @@ Provide the future interactive frontend over the same application services.
 State:
 
 - active query draft
-- current result page
+- full scanned row dataset status
+- current match result set
 - selected event or message
 - loaded trace metadata
 
@@ -49,8 +51,10 @@ Fields:
 
 ### `class TraceTableViewModel`
 
-- `void refresh(const QuerySpec& querySpec)`
-- `std::span<const QueryMatch> visibleRows() const`
+- `void startScan(const QuerySpec& querySpec)`
+- `void startFilter(const QuerySpec& querySpec, FilterSource filterSource)`
+- `void resetMatchesToFullDataset()`
+- `std::span<const QueryResultRow> visibleRows() const`
 
 ### `class TimelineViewModel`
 
@@ -72,16 +76,29 @@ The GUI should separate:
 - GUI view models
 - application service requests
 
-View models own GUI-facing state but never own the core data model itself.
+The GUI now uses a three-layer interaction model:
+
+1. Scan phase:
+   The selected trace file is read once into an in-memory vector of `QueryResultRow`.
+   If scan-time decode is enabled, each stored row may also contain decoded DBC data.
+2. Filter-from-full phase:
+   The current filter draft is applied against the full in-memory dataset to rebuild the current match dataset without rereading the trace file.
+3. Refine-current phase:
+   Additional filters may be applied against the current match dataset only, allowing progressive narrowing until the user resets filters.
+
+The full scanned dataset remains valid until the user requests a new scan. Resetting filters restores the current match dataset from the full scanned dataset. The GUI also presents a temporary action popup to distinguish file reads from in-memory filtering operations.
+
+View models own GUI-facing state, the in-memory row datasets, and operation progress state for the frontend workflow.
 
 ## Performance Notes
 
-- support incremental refresh
-- avoid full-table copies for large traces
-- use cache and index services for navigation and paging
+- scanning may be long-running and should run asynchronously
+- in-memory filtering avoids rereading the trace file for filter changes after a scan completes
+- the full scanned dataset and the current match dataset are both GUI-owned RAM structures
+- future cache and index services may still be used to support larger-than-memory workflows
 
 ## Verification
 
 - view-model tests where practical
-- smoke tests for main user journeys
+- smoke tests for scan, filter-from-full, refine-current, and reset journeys
 - responsiveness checks on large traces

@@ -20,6 +20,8 @@ namespace can_gui
 struct GuiQueryState
 {
   can_core::QuerySpec querySpec;
+  bool hasVisibleTimestampRange = false;
+  bool hasVisibleOrdinalRange = false;
   std::uint64_t visibleStartTimestampNs = 0;
   std::uint64_t visibleEndTimestampNs = 0;
   std::uint64_t visibleStartOrdinal = 0;
@@ -44,6 +46,20 @@ public:
 class TraceTableViewModel
 {
 public:
+  enum class FilterSource
+  {
+    FullDataset,
+    CurrentMatches,
+  };
+
+  enum class ActiveOperation
+  {
+    None,
+    ScanFile,
+    FilterFullDataset,
+    FilterCurrentMatches,
+  };
+
   struct ProgressSnapshot
   {
     std::uint64_t scannedEvents = 0;
@@ -53,19 +69,25 @@ public:
   };
 
   void setRunOptions(can_app::RunOptions runOptions);
-  void startRefresh(const can_core::QuerySpec &querySpec);
-  void cancelRefresh();
-  [[nodiscard]] bool pollRefresh();
-  [[nodiscard]] bool isRefreshInProgress() const;
+  void startScan(const GuiQueryState &queryState);
+  void startFilter(const GuiQueryState &queryState, FilterSource filterSource);
+  void resetMatchesToFullDataset();
+  void cancelActiveOperation();
+  [[nodiscard]] bool pollActiveOperation();
+  [[nodiscard]] bool isOperationInProgress() const;
   [[nodiscard]] std::span<const can_app::QueryResultRow> visibleRows() const;
   [[nodiscard]] const can_app::RunSummary &runSummary() const;
   [[nodiscard]] const can_core::TraceMetadata &traceMetadata() const;
   [[nodiscard]] std::span<const std::uint8_t> visibleChannels() const;
   [[nodiscard]] bool hasDecodedRows() const;
-  [[nodiscard]] bool wasLastRefreshCancelled() const;
+  [[nodiscard]] bool hasFullDataset() const;
+  [[nodiscard]] bool fullDatasetHasDecodedRows() const;
+  [[nodiscard]] std::size_t fullRowCount() const;
+  [[nodiscard]] bool wasLastOperationCancelled() const;
+  [[nodiscard]] ActiveOperation activeOperation() const;
   [[nodiscard]] ProgressSnapshot progressSnapshot() const;
-  [[nodiscard]] std::chrono::system_clock::time_point refreshStartWallClock() const;
-  [[nodiscard]] std::chrono::steady_clock::time_point refreshStartSteadyClock() const;
+  [[nodiscard]] std::chrono::system_clock::time_point operationStartWallClock() const;
+  [[nodiscard]] std::chrono::steady_clock::time_point operationStartSteadyClock() const;
 
 private:
   struct SharedProgressState
@@ -78,27 +100,36 @@ private:
 
   struct RefreshSnapshot
   {
+    std::vector<can_app::QueryResultRow> fullRows;
     std::vector<can_app::QueryResultRow> rows;
     can_app::RunSummary runSummary;
     can_core::TraceMetadata traceMetadata;
     std::vector<std::uint8_t> visibleChannels;
     bool hasDecodedRows = false;
     bool wasCancelled = false;
+    bool shouldReplaceFullDataset = false;
+    bool fullDatasetHasDecodedRows = false;
+    ActiveOperation completedOperation = ActiveOperation::None;
   };
 
   can_app::CanApp canApp_;
   can_app::RunOptions runOptions_;
+  std::vector<can_app::QueryResultRow> fullRows_;
   std::vector<can_app::QueryResultRow> rows_;
   can_app::RunSummary runSummary_;
   can_core::TraceMetadata traceMetadata_;
   std::vector<std::uint8_t> visibleChannels_;
   bool hasDecodedRows_ = false;
-  bool wasLastRefreshCancelled_ = false;
+  bool hasFullDataset_ = false;
+  bool fullDatasetHasDecodedRows_ = false;
+  bool wasLastOperationCancelled_ = false;
+  ActiveOperation activeOperation_ = ActiveOperation::None;
+  ActiveOperation lastCompletedOperation_ = ActiveOperation::None;
   std::future<RefreshSnapshot> refreshFuture_;
   std::shared_ptr<std::atomic<bool>> cancellationFlag_;
   std::shared_ptr<SharedProgressState> progressState_;
-  std::chrono::system_clock::time_point refreshStartWallClock_{};
-  std::chrono::steady_clock::time_point refreshStartSteadyClock_{};
+  std::chrono::system_clock::time_point operationStartWallClock_{};
+  std::chrono::steady_clock::time_point operationStartSteadyClock_{};
 };
 
 class QueryPanelViewModel
@@ -184,16 +215,21 @@ private:
   bool initialize();
   void shutdown();
   void handlePendingRefresh();
-  void refreshResults();
   void renderMenuBar();
   void renderOverviewPanel();
   void renderQueryPanel();
   void renderTimelinePanel();
   void renderTraceTablePanel();
   void renderSignalPanel();
+  void renderTransientActionPopup();
   void syncSessionFromDraft();
   void syncSelection();
-  void markRefreshNeeded();
+  void showTransientActionPopup(const std::string &message);
+  void triggerScanFile();
+  void applyFiltersFromFullDataset();
+  void applyFiltersToCurrentMatches();
+  void resetFilters();
+  void markFilterRefreshNeeded();
   void shiftOrdinalWindow(std::int64_t delta);
   void refreshDevelopDataFiles();
   void applySelectedDevelopFiles(bool shouldMarkRefresh);
@@ -211,6 +247,8 @@ private:
   bool isRunning_ = true;
   bool isInitialized_ = false;
   bool isRefreshPending_ = false;
+  std::string transientPopupMessage_;
+  std::chrono::steady_clock::time_point transientPopupExpiry_{};
   std::chrono::steady_clock::time_point lastEditTime_{};
 };
 } // namespace can_gui

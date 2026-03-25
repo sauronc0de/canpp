@@ -298,16 +298,16 @@ If scripting is disabled, the core path remains unchanged.
 
 ## 12. GUI Interactive Flow Preparation
 
-The future GUI flow should be:
+The GUI interactive flow is:
 
-`UI interaction -> application service request -> query executor -> incremental result view -> UI refresh`
+`UI interaction -> optional scan request -> full row dataset in RAM -> in-memory filtering -> UI refresh`
 
 Important consequences:
 
-- Query execution must support partial or paged result consumption
+- The GUI may decouple scan-time file reading from later filter edits
 - Session state belongs above the application service layer
-- Time navigation should be backed by indexes or cache metadata rather than
-  GUI-owned processing logic
+- The full scanned dataset and the current match dataset are separate frontend-owned runtime structures
+- Time navigation can operate on the current match dataset after a scan without rereading the trace file
 
 ### 12.1 Sequence Diagram
 
@@ -316,16 +316,14 @@ sequenceDiagram
     participant UI as GUI
     participant APP as can_app
     participant Q as can_query
-    participant IDX as can_index/cache
-
-    UI->>APP: update filter / time window
-    APP->>Q: execute or refine query
-    opt accelerated navigation
-        Q->>IDX: narrow time region / positions
-        IDX-->>Q: candidate ranges
-    end
-    Q-->>APP: incremental results
-    APP-->>UI: view model update
+    
+    UI->>APP: scan file
+    APP->>Q: execute full-file scan
+    Q-->>APP: full scanned row stream
+    APP-->>UI: full row dataset in RAM
+    UI->>UI: apply filters from full dataset
+    UI->>UI: optionally refine current matches
+    UI-->>UI: update current visible rows
 ```
 
 ## 13. Dynamic View Notes

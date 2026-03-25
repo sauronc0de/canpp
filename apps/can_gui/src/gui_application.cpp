@@ -16,6 +16,7 @@
 #include <span>
 #include <sstream>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include <GL/glew.h>
@@ -30,7 +31,6 @@ namespace can_gui
 namespace
 {
 constexpr std::size_t kInputBufferSize = 256U;
-constexpr std::size_t kMaximumVisibleRows = (size_t)-1;
 constexpr std::uint64_t kDefaultOrdinalWindowSize = 2000U;
 constexpr int kWindowWidth = 1600;
 constexpr int kWindowHeight = 960;
@@ -721,6 +721,385 @@ bool renderCompactRangeInputs(
   ImGui::EndDisabled();
   return wasEdited;
 }
+
+std::string normalizeForCaseInsensitiveCompare(std::string_view value)
+{
+  std::string normalizedValue(value);
+  std::transform(normalizedValue.begin(), normalizedValue.end(), normalizedValue.begin(), [](unsigned char character) {
+    return static_cast<char>(std::tolower(character));
+  });
+  return normalizedValue;
+}
+
+bool isEmptyFilter(const can_core::FilterExpr &filterExpr)
+{
+  return !filterExpr.predicate.has_value() && filterExpr.children.empty();
+}
+
+std::optional<double> toDouble(const can_core::FilterValue &filterValue)
+{
+  return std::visit(
+      [](const auto &value) -> std::optional<double> {
+        using ValueType = std::decay_t<decltype(value)>;
+        if constexpr(std::is_same_v<ValueType, std::monostate>)
+        {
+          return std::nullopt;
+        }
+        else if constexpr(std::is_same_v<ValueType, bool>)
+        {
+          return value ? 1.0 : 0.0;
+        }
+        else if constexpr(std::is_same_v<ValueType, std::uint64_t> || std::is_same_v<ValueType, std::int64_t> ||
+                          std::is_same_v<ValueType, double>)
+        {
+          return static_cast<double>(value);
+        }
+        else
+        {
+          return std::nullopt;
+        }
+      },
+      filterValue);
+}
+
+std::optional<std::string_view> toStringView(const can_core::FilterValue &filterValue)
+{
+  if(const auto *value = std::get_if<std::string>(&filterValue))
+  {
+    return *value;
+  }
+
+  return std::nullopt;
+}
+
+bool compareNumeric(double leftValue, double rightValue, can_core::FilterOperator filterOperator)
+{
+  switch(filterOperator)
+  {
+  case can_core::FilterOperator::Equal:
+    return leftValue == rightValue;
+  case can_core::FilterOperator::NotEqual:
+    return leftValue != rightValue;
+  case can_core::FilterOperator::Less:
+    return leftValue < rightValue;
+  case can_core::FilterOperator::LessOrEqual:
+    return leftValue <= rightValue;
+  case can_core::FilterOperator::Greater:
+    return leftValue > rightValue;
+  case can_core::FilterOperator::GreaterOrEqual:
+    return leftValue >= rightValue;
+  case can_core::FilterOperator::Contains:
+    return false;
+  }
+
+  return false;
+}
+
+bool compareString(std::string_view leftValue, std::string_view rightValue, can_core::FilterOperator filterOperator)
+{
+  const std::string normalizedLeftValue = normalizeForCaseInsensitiveCompare(leftValue);
+  const std::string normalizedRightValue = normalizeForCaseInsensitiveCompare(rightValue);
+
+  switch(filterOperator)
+  {
+  case can_core::FilterOperator::Equal:
+    return normalizedLeftValue == normalizedRightValue;
+  case can_core::FilterOperator::NotEqual:
+    return normalizedLeftValue != normalizedRightValue;
+  case can_core::FilterOperator::Contains:
+    return normalizedLeftValue.find(normalizedRightValue) != std::string::npos;
+  case can_core::FilterOperator::Less:
+  case can_core::FilterOperator::LessOrEqual:
+  case can_core::FilterOperator::Greater:
+  case can_core::FilterOperator::GreaterOrEqual:
+    return false;
+  }
+
+  return false;
+}
+
+bool evaluateRawPredicate(const can_core::Predicate &predicate, const can_core::CanEvent &canEvent)
+{
+  switch(predicate.field)
+  {
+  case can_core::FilterField::TimestampNs:
+  {
+    const auto predicateValue = toDouble(predicate.value);
+    return predicateValue.has_value() &&
+           compareNumeric(static_cast<double>(canEvent.timestampNs), *predicateValue, predicate.filterOperator);
+  }
+  case can_core::FilterField::CanId:
+  {
+    const auto predicateValue = toDouble(predicate.value);
+    return predicateValue.has_value() &&
+           compareNumeric(static_cast<double>(canEvent.canId), *predicateValue, predicate.filterOperator);
+  }
+  case can_core::FilterField::Channel:
+  {
+    const auto predicateValue = toDouble(predicate.value);
+    return predicateValue.has_value() &&
+           compareNumeric(static_cast<double>(canEvent.channel), *predicateValue, predicate.filterOperator);
+  }
+  case can_core::FilterField::FrameType:
+  {
+    const auto predicateValue = toDouble(predicate.value);
+    return predicateValue.has_value() &&
+           compareNumeric(static_cast<double>(static_cast<std::uint8_t>(canEvent.frameType)), *predicateValue, predicate.filterOperator);
+  }
+  case can_core::FilterField::MessageName:
+  case can_core::FilterField::SignalName:
+  case can_core::FilterField::SignalValue:
+    return true;
+  }
+
+  return false;
+}
+
+bool evaluateRawFilter(const can_core::FilterExpr &filterExpr, const can_core::CanEvent &canEvent)
+{
+  if(isEmptyFilter(filterExpr))
+  {
+    return true;
+  }
+
+  if(filterExpr.predicate.has_value())
+  {
+    return evaluateRawPredicate(*filterExpr.predicate, canEvent);
+  }
+
+  if(filterExpr.logicalOperator == can_core::LogicalOperator::Not)
+  {
+    if(filterExpr.children.empty())
+    {
+      return true;
+    }
+
+    return !evaluateRawFilter(filterExpr.children.front(), canEvent);
+  }
+
+  const bool initialValue = filterExpr.logicalOperator == can_core::LogicalOperator::And;
+  bool result = initialValue;
+  for(const can_core::FilterExpr &child : filterExpr.children)
+  {
+    const bool childValue = evaluateRawFilter(child, canEvent);
+    if(filterExpr.logicalOperator == can_core::LogicalOperator::And)
+    {
+      result = result && childValue;
+      if(!result)
+      {
+        return false;
+      }
+    }
+    else
+    {
+      result = result || childValue;
+      if(result)
+      {
+        return true;
+      }
+    }
+  }
+
+  return result;
+}
+
+bool matchesSignalName(std::string_view signalName, const can_decode::DecodedMessage &decodedMessage, can_core::FilterOperator filterOperator)
+{
+  for(const can_decode::DecodedSignal &decodedSignal : decodedMessage.signals)
+  {
+    if(compareString(decodedSignal.name, signalName, filterOperator))
+    {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool matchesSignalValue(double signalValue, const can_decode::DecodedMessage &decodedMessage, can_core::FilterOperator filterOperator)
+{
+  for(const can_decode::DecodedSignal &decodedSignal : decodedMessage.signals)
+  {
+    const auto decodedValue = std::visit(
+        [](const auto &value) -> double { return static_cast<double>(value); },
+        decodedSignal.value);
+
+    if(compareNumeric(decodedValue, signalValue, filterOperator))
+    {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool evaluateDecodedPredicate(const can_core::Predicate &predicate, const can_decode::DecodedMessage &decodedMessage)
+{
+  switch(predicate.field)
+  {
+  case can_core::FilterField::MessageName:
+  {
+    const auto predicateValue = toStringView(predicate.value);
+    return predicateValue.has_value() && compareString(decodedMessage.messageName, *predicateValue, predicate.filterOperator);
+  }
+  case can_core::FilterField::SignalName:
+  {
+    const auto predicateValue = toStringView(predicate.value);
+    return predicateValue.has_value() && matchesSignalName(*predicateValue, decodedMessage, predicate.filterOperator);
+  }
+  case can_core::FilterField::SignalValue:
+  {
+    const auto predicateValue = toDouble(predicate.value);
+    return predicateValue.has_value() && matchesSignalValue(*predicateValue, decodedMessage, predicate.filterOperator);
+  }
+  case can_core::FilterField::TimestampNs:
+  case can_core::FilterField::CanId:
+  case can_core::FilterField::Channel:
+  case can_core::FilterField::FrameType:
+    return true;
+  }
+
+  return false;
+}
+
+bool evaluateDecodedFilter(const can_core::FilterExpr &filterExpr, const can_decode::DecodedMessage &decodedMessage)
+{
+  if(isEmptyFilter(filterExpr))
+  {
+    return true;
+  }
+
+  if(filterExpr.predicate.has_value())
+  {
+    return evaluateDecodedPredicate(*filterExpr.predicate, decodedMessage);
+  }
+
+  if(filterExpr.logicalOperator == can_core::LogicalOperator::Not)
+  {
+    if(filterExpr.children.empty())
+    {
+      return true;
+    }
+
+    return !evaluateDecodedFilter(filterExpr.children.front(), decodedMessage);
+  }
+
+  const bool initialValue = filterExpr.logicalOperator == can_core::LogicalOperator::And;
+  bool result = initialValue;
+  for(const can_core::FilterExpr &child : filterExpr.children)
+  {
+    const bool childValue = evaluateDecodedFilter(child, decodedMessage);
+    if(filterExpr.logicalOperator == can_core::LogicalOperator::And)
+    {
+      result = result && childValue;
+      if(!result)
+      {
+        return false;
+      }
+    }
+    else
+    {
+      result = result || childValue;
+      if(result)
+      {
+        return true;
+      }
+    }
+  }
+
+  return result;
+}
+
+bool rowMatchesQuery(const can_app::QueryResultRow &queryResultRow, const GuiQueryState &queryState)
+{
+  if(queryState.hasVisibleOrdinalRange &&
+     queryState.visibleEndOrdinal >= queryState.visibleStartOrdinal)
+  {
+    if(queryResultRow.ordinal < queryState.visibleStartOrdinal || queryResultRow.ordinal > queryState.visibleEndOrdinal)
+    {
+      return false;
+    }
+  }
+
+  if(!evaluateRawFilter(queryState.querySpec.rawFilter, queryResultRow.canEvent))
+  {
+    return false;
+  }
+
+  if(queryState.querySpec.decodedFilter.has_value())
+  {
+    if(!queryResultRow.decodedMessage.has_value())
+    {
+      return false;
+    }
+
+    return evaluateDecodedFilter(*queryState.querySpec.decodedFilter, *queryResultRow.decodedMessage);
+  }
+
+  return true;
+}
+
+std::vector<std::uint8_t> collectVisibleChannels(std::span<const can_app::QueryResultRow> rows)
+{
+  std::vector<std::uint8_t> visibleChannels;
+  for(const can_app::QueryResultRow &queryResultRow : rows)
+  {
+    if(std::find(visibleChannels.begin(), visibleChannels.end(), queryResultRow.canEvent.channel) == visibleChannels.end())
+    {
+      visibleChannels.push_back(queryResultRow.canEvent.channel);
+    }
+  }
+
+  std::sort(visibleChannels.begin(), visibleChannels.end());
+  return visibleChannels;
+}
+
+bool rowsHaveDecodedData(std::span<const can_app::QueryResultRow> rows)
+{
+  return std::any_of(rows.begin(), rows.end(), [](const can_app::QueryResultRow &queryResultRow) {
+    return queryResultRow.decodedMessage.has_value();
+  });
+}
+
+can_core::TraceMetadata buildTraceMetadata(std::span<const can_app::QueryResultRow> rows, std::string_view sourcePath)
+{
+  can_core::TraceMetadata traceMetadata;
+  traceMetadata.sourcePath = std::string(sourcePath);
+  const std::size_t extensionSeparator = traceMetadata.sourcePath.find_last_of('.');
+  traceMetadata.sourceFormat = traceMetadata.sourcePath.substr(
+      extensionSeparator == std::string::npos ? traceMetadata.sourcePath.size() : extensionSeparator);
+  traceMetadata.eventCount = rows.size();
+  if(rows.empty())
+  {
+    return traceMetadata;
+  }
+
+  traceMetadata.startTimestampNs = rows.front().canEvent.timestampNs;
+  traceMetadata.endTimestampNs = rows.front().canEvent.timestampNs;
+  for(const can_app::QueryResultRow &queryResultRow : rows)
+  {
+    traceMetadata.startTimestampNs = std::min(traceMetadata.startTimestampNs, queryResultRow.canEvent.timestampNs);
+    traceMetadata.endTimestampNs = std::max(traceMetadata.endTimestampNs, queryResultRow.canEvent.timestampNs);
+  }
+  return traceMetadata;
+}
+
+const char *operationLabel(TraceTableViewModel::ActiveOperation activeOperation)
+{
+  switch(activeOperation)
+  {
+  case TraceTableViewModel::ActiveOperation::None:
+    return "idle";
+  case TraceTableViewModel::ActiveOperation::ScanFile:
+    return "scanning file";
+  case TraceTableViewModel::ActiveOperation::FilterFullDataset:
+    return "filtering full rows";
+  case TraceTableViewModel::ActiveOperation::FilterCurrentMatches:
+    return "filtering current matches";
+  }
+
+  return "idle";
+}
 } // namespace
 
 void TraceTableViewModel::setRunOptions(can_app::RunOptions runOptions)
@@ -728,28 +1107,23 @@ void TraceTableViewModel::setRunOptions(can_app::RunOptions runOptions)
   runOptions_ = std::move(runOptions);
 }
 
-void TraceTableViewModel::startRefresh(const can_core::QuerySpec &querySpec)
+void TraceTableViewModel::startScan(const GuiQueryState &queryState)
 {
-  cancelRefresh();
+  cancelActiveOperation();
 
-  can_app::RunOptions runOptions = runOptions_;
-  runOptions.rawFilter.reset();
-  runOptions.decodedFilter.reset();
-  runOptions.shouldDecodeMatches = querySpec.shouldDecode;
-  if(!querySpec.rawFilter.children.empty() || querySpec.rawFilter.predicate.has_value())
-  {
-    runOptions.rawFilter = querySpec.rawFilter;
-  }
-  if(querySpec.decodedFilter.has_value())
-  {
-    runOptions.decodedFilter = querySpec.decodedFilter;
-  }
-
-  refreshStartWallClock_ = std::chrono::system_clock::now();
-  refreshStartSteadyClock_ = std::chrono::steady_clock::now();
+  activeOperation_ = ActiveOperation::ScanFile;
+  operationStartWallClock_ = std::chrono::system_clock::now();
+  operationStartSteadyClock_ = std::chrono::steady_clock::now();
   cancellationFlag_ = std::make_shared<std::atomic<bool>>(false);
   progressState_ = std::make_shared<SharedProgressState>();
   const std::shared_ptr<SharedProgressState> progressState = progressState_;
+  can_app::RunOptions runOptions = runOptions_;
+  runOptions.rawFilter.reset();
+  runOptions.decodedFilter.reset();
+  runOptions.startOrdinal.reset();
+  runOptions.endOrdinal.reset();
+  runOptions.maxResultRows.reset();
+  runOptions.shouldDecodeMatches = queryState.querySpec.shouldDecode;
   runOptions.shouldCancel = cancellationFlag_.get();
   runOptions.progressCallback = [progressState](const can_query::QueryProgress &queryProgress) {
     if(progressState == nullptr)
@@ -762,43 +1136,38 @@ void TraceTableViewModel::startRefresh(const can_core::QuerySpec &querySpec)
     progressState->bytesParsed.store(queryProgress.bytesParsed);
     progressState->totalBytes.store(queryProgress.totalBytes);
   };
+
   refreshFuture_ = std::async(
       std::launch::async,
-      [this, runOptions, progressState]() mutable {
+      [this, runOptions, queryState, progressState]() mutable {
         RefreshSnapshot refreshSnapshot;
+        refreshSnapshot.shouldReplaceFullDataset = true;
+        refreshSnapshot.completedOperation = ActiveOperation::ScanFile;
         refreshSnapshot.runSummary = canApp_.run(
             runOptions,
             [&refreshSnapshot](const can_app::QueryResultRow &queryResultRow) {
-              if(refreshSnapshot.rows.size() < kMaximumVisibleRows)
-              {
-                refreshSnapshot.rows.push_back(queryResultRow);
-              }
-
-              refreshSnapshot.traceMetadata.startTimestampNs = refreshSnapshot.rows.size() == 1U
-                                                                   ? queryResultRow.canEvent.timestampNs
-                                                                   : std::min(refreshSnapshot.traceMetadata.startTimestampNs, queryResultRow.canEvent.timestampNs);
-              refreshSnapshot.traceMetadata.endTimestampNs =
-                  std::max(refreshSnapshot.traceMetadata.endTimestampNs, queryResultRow.canEvent.timestampNs);
-
-              if(std::find(
-                     refreshSnapshot.visibleChannels.begin(),
-                     refreshSnapshot.visibleChannels.end(),
-                     queryResultRow.canEvent.channel) == refreshSnapshot.visibleChannels.end())
-              {
-                refreshSnapshot.visibleChannels.push_back(queryResultRow.canEvent.channel);
-                std::sort(refreshSnapshot.visibleChannels.begin(), refreshSnapshot.visibleChannels.end());
-              }
-
-              refreshSnapshot.hasDecodedRows = refreshSnapshot.hasDecodedRows || queryResultRow.decodedMessage.has_value();
+              refreshSnapshot.fullRows.push_back(queryResultRow);
             });
 
-        refreshSnapshot.traceMetadata.sourcePath = runOptions.tracePath;
-        refreshSnapshot.traceMetadata.eventCount = refreshSnapshot.runSummary.matchedEvents;
-        refreshSnapshot.traceMetadata.sourceFormat =
-            runOptions.tracePath.substr(runOptions.tracePath.find_last_of('.') == std::string::npos
-                                            ? runOptions.tracePath.size()
-                                            : runOptions.tracePath.find_last_of('.'));
         refreshSnapshot.wasCancelled = refreshSnapshot.runSummary.wasCancelled;
+        refreshSnapshot.fullDatasetHasDecodedRows = rowsHaveDecodedData(refreshSnapshot.fullRows);
+        if(!refreshSnapshot.wasCancelled && !refreshSnapshot.runSummary.hasError())
+        {
+          for(const can_app::QueryResultRow &queryResultRow : refreshSnapshot.fullRows)
+          {
+            if(rowMatchesQuery(queryResultRow, queryState))
+            {
+              refreshSnapshot.rows.push_back(queryResultRow);
+            }
+          }
+
+          refreshSnapshot.runSummary.scannedEvents = refreshSnapshot.fullRows.size();
+          refreshSnapshot.runSummary.matchedEvents = refreshSnapshot.rows.size();
+          refreshSnapshot.traceMetadata = buildTraceMetadata(refreshSnapshot.rows, runOptions.tracePath);
+          refreshSnapshot.visibleChannels = collectVisibleChannels(refreshSnapshot.rows);
+          refreshSnapshot.hasDecodedRows = rowsHaveDecodedData(refreshSnapshot.rows);
+        }
+
         if(progressState != nullptr)
         {
           progressState->scannedEvents.store(refreshSnapshot.runSummary.scannedEvents);
@@ -812,7 +1181,82 @@ void TraceTableViewModel::startRefresh(const can_core::QuerySpec &querySpec)
       });
 }
 
-void TraceTableViewModel::cancelRefresh()
+void TraceTableViewModel::startFilter(const GuiQueryState &queryState, FilterSource filterSource)
+{
+  cancelActiveOperation();
+
+  activeOperation_ = filterSource == FilterSource::FullDataset ? ActiveOperation::FilterFullDataset
+                                                               : ActiveOperation::FilterCurrentMatches;
+  operationStartWallClock_ = std::chrono::system_clock::now();
+  operationStartSteadyClock_ = std::chrono::steady_clock::now();
+  cancellationFlag_ = std::make_shared<std::atomic<bool>>(false);
+  progressState_ = std::make_shared<SharedProgressState>();
+  const std::shared_ptr<SharedProgressState> progressState = progressState_;
+  const std::shared_ptr<std::atomic<bool>> cancellationFlag = cancellationFlag_;
+  const std::vector<can_app::QueryResultRow> sourceRows =
+      filterSource == FilterSource::FullDataset ? fullRows_ : rows_;
+  const std::string tracePath = runOptions_.tracePath;
+  refreshFuture_ = std::async(
+      std::launch::async,
+      [queryState, filterSource, sourceRows, tracePath, progressState, cancellationFlag]() {
+        RefreshSnapshot refreshSnapshot;
+        refreshSnapshot.completedOperation = filterSource == FilterSource::FullDataset
+                                                 ? ActiveOperation::FilterFullDataset
+                                                 : ActiveOperation::FilterCurrentMatches;
+        refreshSnapshot.runSummary.scannedEvents = 0U;
+        refreshSnapshot.runSummary.matchedEvents = 0U;
+        refreshSnapshot.rows.reserve(sourceRows.size());
+
+        if(progressState != nullptr)
+        {
+          progressState->totalBytes.store(sourceRows.size());
+        }
+
+        for(const can_app::QueryResultRow &queryResultRow : sourceRows)
+        {
+          if(cancellationFlag != nullptr && cancellationFlag->load())
+          {
+            refreshSnapshot.wasCancelled = true;
+            refreshSnapshot.runSummary.wasCancelled = true;
+            return refreshSnapshot;
+          }
+
+          ++refreshSnapshot.runSummary.scannedEvents;
+          if(rowMatchesQuery(queryResultRow, queryState))
+          {
+            refreshSnapshot.rows.push_back(queryResultRow);
+            ++refreshSnapshot.runSummary.matchedEvents;
+          }
+
+          if(progressState != nullptr)
+          {
+            progressState->scannedEvents.store(refreshSnapshot.runSummary.scannedEvents);
+            progressState->matchedEvents.store(refreshSnapshot.runSummary.matchedEvents);
+            progressState->bytesParsed.store(refreshSnapshot.runSummary.scannedEvents);
+          }
+        }
+
+        refreshSnapshot.traceMetadata = buildTraceMetadata(refreshSnapshot.rows, tracePath);
+        refreshSnapshot.visibleChannels = collectVisibleChannels(refreshSnapshot.rows);
+        refreshSnapshot.hasDecodedRows = rowsHaveDecodedData(refreshSnapshot.rows);
+        refreshSnapshot.fullDatasetHasDecodedRows = rowsHaveDecodedData(sourceRows);
+        return refreshSnapshot;
+      });
+}
+
+void TraceTableViewModel::resetMatchesToFullDataset()
+{
+  rows_ = fullRows_;
+  runSummary_.scannedEvents = fullRows_.size();
+  runSummary_.matchedEvents = rows_.size();
+  runSummary_.wasCancelled = false;
+  runSummary_.errorInfo = {};
+  traceMetadata_ = buildTraceMetadata(rows_, runOptions_.tracePath);
+  visibleChannels_ = collectVisibleChannels(rows_);
+  hasDecodedRows_ = rowsHaveDecodedData(rows_);
+}
+
+void TraceTableViewModel::cancelActiveOperation()
 {
   if(cancellationFlag_ != nullptr)
   {
@@ -820,7 +1264,7 @@ void TraceTableViewModel::cancelRefresh()
   }
 }
 
-bool TraceTableViewModel::pollRefresh()
+bool TraceTableViewModel::pollActiveOperation()
 {
   if(!refreshFuture_.valid())
   {
@@ -834,12 +1278,20 @@ bool TraceTableViewModel::pollRefresh()
 
   RefreshSnapshot refreshSnapshot = refreshFuture_.get();
   cancellationFlag_.reset();
-  wasLastRefreshCancelled_ = refreshSnapshot.wasCancelled;
+  wasLastOperationCancelled_ = refreshSnapshot.wasCancelled;
+  lastCompletedOperation_ = refreshSnapshot.completedOperation;
+  activeOperation_ = ActiveOperation::None;
   if(refreshSnapshot.wasCancelled)
   {
     return true;
   }
 
+  if(refreshSnapshot.shouldReplaceFullDataset)
+  {
+    fullRows_ = std::move(refreshSnapshot.fullRows);
+    hasFullDataset_ = !refreshSnapshot.runSummary.hasError();
+    fullDatasetHasDecodedRows_ = refreshSnapshot.fullDatasetHasDecodedRows;
+  }
   rows_ = std::move(refreshSnapshot.rows);
   runSummary_ = refreshSnapshot.runSummary;
   traceMetadata_ = std::move(refreshSnapshot.traceMetadata);
@@ -848,7 +1300,7 @@ bool TraceTableViewModel::pollRefresh()
   return true;
 }
 
-bool TraceTableViewModel::isRefreshInProgress() const
+bool TraceTableViewModel::isOperationInProgress() const
 {
   return refreshFuture_.valid() &&
          refreshFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready;
@@ -879,9 +1331,29 @@ bool TraceTableViewModel::hasDecodedRows() const
   return hasDecodedRows_;
 }
 
-bool TraceTableViewModel::wasLastRefreshCancelled() const
+bool TraceTableViewModel::hasFullDataset() const
 {
-  return wasLastRefreshCancelled_;
+  return hasFullDataset_;
+}
+
+bool TraceTableViewModel::fullDatasetHasDecodedRows() const
+{
+  return fullDatasetHasDecodedRows_;
+}
+
+std::size_t TraceTableViewModel::fullRowCount() const
+{
+  return fullRows_.size();
+}
+
+bool TraceTableViewModel::wasLastOperationCancelled() const
+{
+  return wasLastOperationCancelled_;
+}
+
+TraceTableViewModel::ActiveOperation TraceTableViewModel::activeOperation() const
+{
+  return activeOperation_;
 }
 
 TraceTableViewModel::ProgressSnapshot TraceTableViewModel::progressSnapshot() const
@@ -899,14 +1371,14 @@ TraceTableViewModel::ProgressSnapshot TraceTableViewModel::progressSnapshot() co
   return progressSnapshot;
 }
 
-std::chrono::system_clock::time_point TraceTableViewModel::refreshStartWallClock() const
+std::chrono::system_clock::time_point TraceTableViewModel::operationStartWallClock() const
 {
-  return refreshStartWallClock_;
+  return operationStartWallClock_;
 }
 
-std::chrono::steady_clock::time_point TraceTableViewModel::refreshStartSteadyClock() const
+std::chrono::steady_clock::time_point TraceTableViewModel::operationStartSteadyClock() const
 {
-  return refreshStartSteadyClock_;
+  return operationStartSteadyClock_;
 }
 
 GuiQueryState QueryPanelViewModel::buildQueryState() const
@@ -919,6 +1391,7 @@ GuiQueryState QueryPanelViewModel::buildQueryState() const
 
   if(enableTimestampRange)
   {
+    guiQueryState.hasVisibleTimestampRange = true;
     const auto timestampStart = parseUnsignedInteger(timestampStartText);
     const auto timestampEnd = parseUnsignedInteger(timestampEndText);
     if(timestampStart.has_value())
@@ -945,6 +1418,7 @@ GuiQueryState QueryPanelViewModel::buildQueryState() const
 
   if(enableOrdinalRange)
   {
+    guiQueryState.hasVisibleOrdinalRange = true;
     if(const auto startOrdinal = parseUnsignedInteger(ordinalStartText); startOrdinal.has_value())
     {
       guiQueryState.visibleStartOrdinal = *startOrdinal;
@@ -1159,14 +1633,14 @@ int GuiApplication::run()
 void GuiApplication::update()
 {
   handlePendingRefresh();
-  if(traceTableViewModel_.pollRefresh())
+  if(traceTableViewModel_.pollActiveOperation())
   {
     guiSession_.runSummary = traceTableViewModel_.runSummary();
     guiSession_.traceMetadata = traceTableViewModel_.traceMetadata();
 
-    if(traceTableViewModel_.wasLastRefreshCancelled())
+    if(traceTableViewModel_.wasLastOperationCancelled())
     {
-      guiSession_.statusMessage = "Query cancelled.";
+      guiSession_.statusMessage = "Action cancelled.";
     }
     else if(guiSession_.runSummary.hasError())
     {
@@ -1174,14 +1648,8 @@ void GuiApplication::update()
     }
     else
     {
-      const std::size_t visibleRowCount = traceTableViewModel_.visibleRows().size();
-      guiSession_.statusMessage = "Showing " + std::to_string(visibleRowCount) + " rows from " +
-                                  std::to_string(guiSession_.runSummary.matchedEvents) + " matches in the current scope (" +
-                                  std::to_string(guiSession_.runSummary.scannedEvents) + " scanned).";
-      if(guiSession_.runSummary.matchedEvents > kMaximumVisibleRows)
-      {
-        guiSession_.statusMessage += " Display is capped to the first " + std::to_string(kMaximumVisibleRows) + " rows.";
-      }
+      guiSession_.statusMessage = "Full rows in RAM: " + std::to_string(traceTableViewModel_.fullRowCount()) +
+                                  " | Current matches: " + std::to_string(traceTableViewModel_.visibleRows().size()) + ".";
     }
 
     const auto rows = traceTableViewModel_.visibleRows();
@@ -1215,6 +1683,7 @@ void GuiApplication::render()
   renderTimelinePanel();
   renderTraceTablePanel();
   renderSignalPanel();
+  renderTransientActionPopup();
 }
 
 bool GuiApplication::initialize()
@@ -1295,7 +1764,7 @@ bool GuiApplication::initialize()
   if(hasAnyTraceSource(queryPanelViewModel_))
   {
     guiSession_.statusMessage =
-        "Trace and DBC inputs are ready. Press Run Query to start, or enable Auto refresh after narrowing the draft.";
+        "Trace and DBC inputs are ready. Press Scan File to load rows into RAM, then filter from memory.";
   }
   else
   {
@@ -1307,7 +1776,7 @@ bool GuiApplication::initialize()
 
 void GuiApplication::shutdown()
 {
-  traceTableViewModel_.cancelRefresh();
+  traceTableViewModel_.cancelActiveOperation();
 
   if(isInitialized_)
   {
@@ -1344,14 +1813,10 @@ void GuiApplication::handlePendingRefresh()
     return;
   }
 
-  if(traceTableViewModel_.isRefreshInProgress())
-  {
-    traceTableViewModel_.cancelRefresh();
-  }
-  refreshResults();
+  applyFiltersFromFullDataset();
 }
 
-void GuiApplication::refreshResults()
+void GuiApplication::triggerScanFile()
 {
   syncSessionFromDraft();
   if(guiSession_.tracePath.empty())
@@ -1361,20 +1826,95 @@ void GuiApplication::refreshResults()
   }
 
   const GuiQueryState draftQueryState = queryPanelViewModel_.buildQueryState();
-  if((draftQueryState.querySpec.decodedFilter.has_value() || draftQueryState.querySpec.shouldDecode) &&
-     queryPanelViewModel_.dbcPath.empty())
+  if(draftQueryState.querySpec.shouldDecode && queryPanelViewModel_.dbcPath.empty())
   {
-    guiSession_.statusMessage = "A DBC path is required for decoded queries or decoded result display.";
+    guiSession_.statusMessage = "A DBC path is required when scan-time decode is enabled.";
     return;
   }
 
   traceTableViewModel_.setRunOptions(queryPanelViewModel_.buildRunOptions());
-  if(traceTableViewModel_.isRefreshInProgress())
+  if(traceTableViewModel_.isOperationInProgress())
   {
-    traceTableViewModel_.cancelRefresh();
+    traceTableViewModel_.cancelActiveOperation();
   }
-  traceTableViewModel_.startRefresh(draftQueryState.querySpec);
-  guiSession_.statusMessage = "Query running for the current scope...";
+  traceTableViewModel_.startScan(draftQueryState);
+  guiSession_.statusMessage = "Reading trace file into RAM...";
+  showTransientActionPopup("Reading trace file into RAM...");
+  isRefreshPending_ = false;
+}
+
+void GuiApplication::applyFiltersFromFullDataset()
+{
+  syncSessionFromDraft();
+  if(!traceTableViewModel_.hasFullDataset())
+  {
+    guiSession_.statusMessage = "Scan the file first to build the full in-memory row list.";
+    return;
+  }
+
+  const GuiQueryState draftQueryState = queryPanelViewModel_.buildQueryState();
+  if(draftQueryState.querySpec.shouldDecode && !traceTableViewModel_.fullDatasetHasDecodedRows())
+  {
+    guiSession_.statusMessage = "Current RAM dataset has no decoded rows. Scan the file again with Decode matches enabled.";
+    return;
+  }
+
+  if(traceTableViewModel_.isOperationInProgress())
+  {
+    traceTableViewModel_.cancelActiveOperation();
+  }
+  traceTableViewModel_.startFilter(draftQueryState, TraceTableViewModel::FilterSource::FullDataset);
+  guiSession_.statusMessage = "Filtering from full rows in RAM...";
+  showTransientActionPopup("Filtering from full rows in RAM...");
+  isRefreshPending_ = false;
+}
+
+void GuiApplication::applyFiltersToCurrentMatches()
+{
+  syncSessionFromDraft();
+  if(traceTableViewModel_.visibleRows().empty())
+  {
+    guiSession_.statusMessage = "There are no current match rows to refine.";
+    return;
+  }
+
+  const GuiQueryState draftQueryState = queryPanelViewModel_.buildQueryState();
+  if(draftQueryState.querySpec.shouldDecode && !traceTableViewModel_.hasDecodedRows())
+  {
+    guiSession_.statusMessage = "Current match rows have no decoded data. Scan the file again with Decode matches enabled.";
+    return;
+  }
+
+  if(traceTableViewModel_.isOperationInProgress())
+  {
+    traceTableViewModel_.cancelActiveOperation();
+  }
+  traceTableViewModel_.startFilter(draftQueryState, TraceTableViewModel::FilterSource::CurrentMatches);
+  guiSession_.statusMessage = "Filtering only the current match rows in RAM...";
+  showTransientActionPopup("Filtering only the current match rows in RAM...");
+  isRefreshPending_ = false;
+}
+
+void GuiApplication::resetFilters()
+{
+  queryPanelViewModel_.resetToDefaults();
+  queryPanelViewModel_.enableTimestampRange = false;
+  queryPanelViewModel_.enableOrdinalRange = false;
+  if(traceTableViewModel_.hasFullDataset())
+  {
+    traceTableViewModel_.resetMatchesToFullDataset();
+    guiSession_.runSummary = traceTableViewModel_.runSummary();
+    guiSession_.traceMetadata = traceTableViewModel_.traceMetadata();
+    guiSession_.statusMessage = "Filters reset. Showing the full in-memory row list.";
+    showTransientActionPopup("Restored the full in-memory row list.");
+    guiSession_.hasSelection = false;
+    guiSession_.selectedRowIndex = 0;
+    signalPanelViewModel_.setSelectedRow(nullptr);
+  }
+  else
+  {
+    guiSession_.statusMessage = "Filters reset. Scan the file to build the full in-memory row list.";
+  }
   isRefreshPending_ = false;
 }
 
@@ -1384,9 +1924,9 @@ void GuiApplication::renderMenuBar()
   {
     if(ImGui::BeginMenu("File"))
     {
-      if(ImGui::MenuItem("Refresh", "Ctrl+R"))
+      if(ImGui::MenuItem("Scan File", "Ctrl+R"))
       {
-        refreshResults();
+        triggerScanFile();
       }
       if(ImGui::MenuItem("Quit"))
       {
@@ -1413,37 +1953,36 @@ void GuiApplication::renderOverviewPanel()
   ImGui::Separator();
   ImGui::Text("Trace: %s", guiSession_.tracePath.empty() ? "<none>" : guiSession_.tracePath.c_str());
   ImGui::Text("DBC: %s", guiSession_.dbcPath.empty() ? "<none>" : guiSession_.dbcPath.c_str());
-  ImGui::Text("Scanned: %" PRIu64, guiSession_.runSummary.scannedEvents);
-  ImGui::Text("Matches: %" PRIu64, guiSession_.runSummary.matchedEvents);
+  ImGui::Text("Full rows in RAM: %zu", traceTableViewModel_.fullRowCount());
+  ImGui::Text("Current matches: %zu", traceTableViewModel_.visibleRows().size());
+  ImGui::Text("Last filter scanned rows: %" PRIu64, guiSession_.runSummary.scannedEvents);
+  ImGui::Text("Last filter matches: %" PRIu64, guiSession_.runSummary.matchedEvents);
   ImGui::Text("Visible rows: %zu", traceTableViewModel_.visibleRows().size());
   ImGui::Text("Decode available: %s", traceTableViewModel_.hasDecodedRows() ? "yes" : "no");
-  ImGui::Text("Query state: %s", traceTableViewModel_.isRefreshInProgress() ? "running" : "idle");
-  if(traceTableViewModel_.isRefreshInProgress())
+  ImGui::Text("Full dataset decoded: %s", traceTableViewModel_.fullDatasetHasDecodedRows() ? "yes" : "no");
+  ImGui::Text("Action state: %s", operationLabel(traceTableViewModel_.activeOperation()));
+  if(traceTableViewModel_.isOperationInProgress())
   {
     const TraceTableViewModel::ProgressSnapshot progressSnapshot = traceTableViewModel_.progressSnapshot();
-    const auto refreshStartSteadyClock = traceTableViewModel_.refreshStartSteadyClock();
-    const auto refreshStartWallClock = traceTableViewModel_.refreshStartWallClock();
+    const auto refreshStartSteadyClock = traceTableViewModel_.operationStartSteadyClock();
+    const auto refreshStartWallClock = traceTableViewModel_.operationStartWallClock();
     float progressFraction = 0.0F;
-    std::string progressLabel = "Starting query...";
+    std::string progressLabel = "Starting action...";
     std::optional<std::chrono::system_clock::time_point> estimatedFinishTime;
-    if(queryPanelViewModel_.enableOrdinalRange)
+    if(traceTableViewModel_.activeOperation() == TraceTableViewModel::ActiveOperation::ScanFile &&
+       progressSnapshot.totalBytes > 0U)
     {
-      const std::uint64_t startOrdinal = parseUnsignedInteger(queryPanelViewModel_.ordinalStartText).value_or(0U);
-      const std::uint64_t endOrdinal = parseUnsignedInteger(queryPanelViewModel_.ordinalEndText).value_or(startOrdinal);
-      const std::uint64_t totalLines = endOrdinal >= startOrdinal ? (endOrdinal - startOrdinal + 1U) : 0U;
-      if(totalLines > 0U)
-      {
-        const std::uint64_t processedLines = std::min(progressSnapshot.scannedEvents, totalLines);
-        progressFraction = static_cast<float>(static_cast<double>(processedLines) / static_cast<double>(totalLines));
-        progressLabel = std::to_string(processedLines) + " / " + std::to_string(totalLines) + " lines parsed";
-      }
+      const std::uint64_t parsedBytes = std::min(progressSnapshot.bytesParsed, progressSnapshot.totalBytes);
+      progressFraction =
+          static_cast<float>(static_cast<double>(parsedBytes) / static_cast<double>(progressSnapshot.totalBytes));
+      progressLabel = formatByteCount(parsedBytes) + " / " + formatByteCount(progressSnapshot.totalBytes) + " parsed";
     }
     else if(progressSnapshot.totalBytes > 0U)
     {
       const std::uint64_t parsedBytes = std::min(progressSnapshot.bytesParsed, progressSnapshot.totalBytes);
       progressFraction =
           static_cast<float>(static_cast<double>(parsedBytes) / static_cast<double>(progressSnapshot.totalBytes));
-      progressLabel = formatByteCount(parsedBytes) + " / " + formatByteCount(progressSnapshot.totalBytes) + " parsed";
+      progressLabel = std::to_string(parsedBytes) + " / " + std::to_string(progressSnapshot.totalBytes) + " rows checked";
     }
 
     if(progressFraction > 0.0001F)
@@ -1473,9 +2012,9 @@ void GuiApplication::renderOverviewPanel()
 
     ImGui::ProgressBar(progressFraction, ImVec2(-1.0F, 0.0F), progressLabel.c_str());
     ImGui::Text("Live: scanned=%" PRIu64 " matched=%" PRIu64, progressSnapshot.scannedEvents, progressSnapshot.matchedEvents);
-    if(ImGui::Button("Cancel Running Query"))
+    if(ImGui::Button("Cancel Running Action"))
     {
-      traceTableViewModel_.cancelRefresh();
+      traceTableViewModel_.cancelActiveOperation();
     }
   }
   ImGui::End();
@@ -1571,6 +2110,7 @@ void GuiApplication::renderQueryPanel()
   }
 
   ImGui::SeparatorText("Rules");
+  ImGui::TextDisabled("Workflow: Scan File -> Apply From Full Rows -> Refine Current Matches when needed.");
   ImGui::TextDisabled("Show=require, Any Of=OR group, Hide=NOT. Text examples: RLS_01 & KL15, RLS_01 | KL15, RLS_01 & !KL15");
 
   const std::string rawHeader = "Raw Trace Rules (" + std::to_string(queryPanelViewModel_.rawRules.size()) + ")";
@@ -1592,10 +2132,9 @@ void GuiApplication::renderQueryPanel()
     ImGui::Spacing();
   }
 
-  if(ImGui::Button("Reset Rules"))
+  if(ImGui::Button("Reset Filters"))
   {
-    queryPanelViewModel_.resetToDefaults();
-    wasEdited = true;
+    resetFilters();
   }
 
   ImGui::SeparatorText("Window");
@@ -1617,16 +2156,6 @@ void GuiApplication::renderQueryPanel()
                   "##ordinal_end") ||
               wasEdited;
 
-  if(ImGui::Checkbox("Row cap", &queryPanelViewModel_.enableResultCap))
-  {
-    wasEdited = true;
-  }
-  ImGui::SameLine();
-  ImGui::BeginDisabled(!queryPanelViewModel_.enableResultCap);
-  ImGui::SetNextItemWidth(120.0F);
-  wasEdited = inputText("##max_rows", queryPanelViewModel_.maxRowsText) || wasEdited;
-  ImGui::EndDisabled();
-
   if(ImGui::Button("Previous Scope"))
   {
     shiftOrdinalWindow(-1);
@@ -1642,25 +2171,33 @@ void GuiApplication::renderQueryPanel()
     queryPanelViewModel_.enableOrdinalRange = true;
     queryPanelViewModel_.ordinalStartText = "0";
     queryPanelViewModel_.ordinalEndText = std::to_string(kDefaultOrdinalWindowSize - 1U);
-    markRefreshNeeded();
+    markFilterRefreshNeeded();
   }
 
   ImGui::Spacing();
-  if(ImGui::Button("Run Query", ImVec2(-1.0F, 0.0F)))
+  if(ImGui::Button("Scan File", ImVec2(-1.0F, 0.0F)))
   {
-    refreshResults();
+    triggerScanFile();
   }
-  if(traceTableViewModel_.isRefreshInProgress())
+  if(ImGui::Button("Apply From Full Rows", ImVec2(-1.0F, 0.0F)))
   {
-    if(ImGui::Button("Cancel Query", ImVec2(-1.0F, 0.0F)))
+    applyFiltersFromFullDataset();
+  }
+  if(ImGui::Button("Refine Current Matches", ImVec2(-1.0F, 0.0F)))
+  {
+    applyFiltersToCurrentMatches();
+  }
+  if(traceTableViewModel_.isOperationInProgress())
+  {
+    if(ImGui::Button("Cancel Action", ImVec2(-1.0F, 0.0F)))
     {
-      traceTableViewModel_.cancelRefresh();
+      traceTableViewModel_.cancelActiveOperation();
     }
   }
 
   if(wasEdited)
   {
-    markRefreshNeeded();
+    markFilterRefreshNeeded();
   }
 
   ImGui::End();
@@ -1683,7 +2220,7 @@ void GuiApplication::renderTimelinePanel()
   const auto rows = traceTableViewModel_.visibleRows();
   if(rows.empty())
   {
-    ImGui::TextDisabled("Run a query to inspect timestamps.");
+    ImGui::TextDisabled("Scan the file and apply a filter to inspect timestamps.");
     ImGui::End();
     return;
   }
@@ -1694,7 +2231,7 @@ void GuiApplication::renderTimelinePanel()
     queryPanelViewModel_.enableTimestampRange = true;
     queryPanelViewModel_.timestampStartText = std::to_string(timelineViewModel_.visibleStartTimestampNs());
     queryPanelViewModel_.timestampEndText = std::to_string(timelineViewModel_.visibleEndTimestampNs());
-    markRefreshNeeded();
+    markFilterRefreshNeeded();
   }
   ImGui::SameLine();
   if(ImGui::Button("Zoom Out"))
@@ -1703,13 +2240,13 @@ void GuiApplication::renderTimelinePanel()
     queryPanelViewModel_.enableTimestampRange = true;
     queryPanelViewModel_.timestampStartText = std::to_string(timelineViewModel_.visibleStartTimestampNs());
     queryPanelViewModel_.timestampEndText = std::to_string(timelineViewModel_.visibleEndTimestampNs());
-    markRefreshNeeded();
+    markFilterRefreshNeeded();
   }
   ImGui::SameLine();
   if(ImGui::Button("Reset Range"))
   {
     queryPanelViewModel_.enableTimestampRange = false;
-    markRefreshNeeded();
+    markFilterRefreshNeeded();
   }
 
   const float minimumTimestamp = static_cast<float>(rows.front().canEvent.timestampNs);
@@ -1730,7 +2267,7 @@ void GuiApplication::renderTimelinePanel()
     queryPanelViewModel_.enableTimestampRange = true;
     queryPanelViewModel_.timestampStartText = std::to_string(static_cast<std::uint64_t>(visibleRange[0]));
     queryPanelViewModel_.timestampEndText = std::to_string(static_cast<std::uint64_t>(visibleRange[1]));
-    markRefreshNeeded();
+    markFilterRefreshNeeded();
   }
 
   ImGui::Text("Channels in current result:");
@@ -1874,6 +2411,41 @@ void GuiApplication::renderSignalPanel()
   ImGui::End();
 }
 
+void GuiApplication::renderTransientActionPopup()
+{
+  if(transientPopupMessage_.empty())
+  {
+    return;
+  }
+
+  if(std::chrono::steady_clock::now() >= transientPopupExpiry_)
+  {
+    transientPopupMessage_.clear();
+    return;
+  }
+
+  ImGuiViewport *viewport = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(
+      ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 24.0F, viewport->WorkPos.y + 24.0F),
+      ImGuiCond_Always,
+      ImVec2(1.0F, 0.0F));
+  ImGui::SetNextWindowBgAlpha(0.90F);
+  ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                           ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+  if(ImGui::Begin("Action Status Popup", nullptr, flags))
+  {
+    ImGui::TextUnformatted(transientPopupMessage_.c_str());
+  }
+  ImGui::End();
+}
+
+void GuiApplication::showTransientActionPopup(const std::string &message)
+{
+  transientPopupMessage_ = message;
+  transientPopupExpiry_ = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+}
+
 void GuiApplication::syncSessionFromDraft()
 {
   guiSession_.tracePath = queryPanelViewModel_.tracePath;
@@ -1895,7 +2467,7 @@ void GuiApplication::syncSelection()
   signalPanelViewModel_.setSelectedRow(&rows[guiSession_.selectedRowIndex]);
 }
 
-void GuiApplication::markRefreshNeeded()
+void GuiApplication::markFilterRefreshNeeded()
 {
   lastEditTime_ = std::chrono::steady_clock::now();
   isRefreshPending_ = true;
@@ -1918,7 +2490,7 @@ void GuiApplication::shiftOrdinalWindow(std::int64_t delta)
   queryPanelViewModel_.enableOrdinalRange = true;
   queryPanelViewModel_.ordinalStartText = std::to_string(normalizedStartOrdinal);
   queryPanelViewModel_.ordinalEndText = std::to_string(normalizedStartOrdinal + windowSize - 1U);
-  markRefreshNeeded();
+  markFilterRefreshNeeded();
 }
 
 void GuiApplication::refreshDevelopDataFiles()
@@ -1989,7 +2561,7 @@ void GuiApplication::applySelectedDevelopFiles(bool shouldMarkRefresh)
   }
   if(shouldMarkRefresh)
   {
-    markRefreshNeeded();
+    markFilterRefreshNeeded();
   }
 #else
   (void)shouldMarkRefresh;

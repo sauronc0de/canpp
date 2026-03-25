@@ -741,6 +741,7 @@ Provide the future interactive frontend over the same application services.
 - bind user interactions to query and navigation requests
 - display raw and decoded data
 - manage time navigation and filtering UX
+- manage a full in-memory scanned row dataset plus a separate current-match dataset
 
 ### Main Public Types
 
@@ -765,13 +766,23 @@ The GUI should separate:
 - GUI view models
 - application service requests
 
-View models own GUI-facing state but never own the core data model itself.
+The implemented GUI workflow uses three layers:
+
+1. Scan:
+   read the selected trace file into a full in-memory row dataset, optionally with decoded DBC data attached to each row.
+2. Filter from full dataset:
+   apply the current filter draft against the full in-memory dataset without rereading the trace file.
+3. Refine current matches:
+   apply additional filters against the current match dataset only until the user resets filters.
+
+Resetting filters restores the current match dataset from the full in-memory dataset. A new file scan replaces the full in-memory dataset. The GUI shows a temporary popup to identify whether an action is reading the file or only filtering RAM-resident rows.
 
 ### Performance Notes
 
-- support incremental refresh
-- avoid full-table copies for large traces
-- use cache and index services for navigation and paging
+- scanning should run asynchronously to keep the UI responsive
+- interactive filter edits should operate on the in-memory full dataset by default
+- current-match refinement may trade extra RAM for reduced repeated file I/O
+- future cache and index services remain relevant for traces that outgrow practical RAM usage
 
 ### Verification
 
@@ -854,4 +865,3 @@ flowchart TD
     EXEC --> EVENT
     LUA -. optional .-> EXEC
 ```
-
