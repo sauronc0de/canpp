@@ -1193,9 +1193,16 @@ void TraceTableViewModel::startFilter(const GuiQueryState &queryState, FilterSou
   progressState_ = std::make_shared<SharedProgressState>();
   const std::shared_ptr<SharedProgressState> progressState = progressState_;
   const std::shared_ptr<std::atomic<bool>> cancellationFlag = cancellationFlag_;
-  const std::vector<can_app::QueryResultRow> sourceRows =
-      filterSource == FilterSource::FullDataset ? fullRows_ : rows_;
+  const std::vector<can_app::QueryResultRow> *sourceRows =
+      filterSource == FilterSource::FullDataset ? &fullRows_ : &rows_;
   const std::string tracePath = runOptions_.tracePath;
+  if(progressState != nullptr)
+  {
+    progressState->scannedEvents.store(0U);
+    progressState->matchedEvents.store(0U);
+    progressState->bytesParsed.store(0U);
+    progressState->totalBytes.store(sourceRows->size());
+  }
   refreshFuture_ = std::async(
       std::launch::async,
       [queryState, filterSource, sourceRows, tracePath, progressState, cancellationFlag]() {
@@ -1205,14 +1212,9 @@ void TraceTableViewModel::startFilter(const GuiQueryState &queryState, FilterSou
                                                  : ActiveOperation::FilterCurrentMatches;
         refreshSnapshot.runSummary.scannedEvents = 0U;
         refreshSnapshot.runSummary.matchedEvents = 0U;
-        refreshSnapshot.rows.reserve(sourceRows.size());
+        refreshSnapshot.rows.reserve(sourceRows->size());
 
-        if(progressState != nullptr)
-        {
-          progressState->totalBytes.store(sourceRows.size());
-        }
-
-        for(const can_app::QueryResultRow &queryResultRow : sourceRows)
+        for(const can_app::QueryResultRow &queryResultRow : *sourceRows)
         {
           if(cancellationFlag != nullptr && cancellationFlag->load())
           {
@@ -1239,7 +1241,7 @@ void TraceTableViewModel::startFilter(const GuiQueryState &queryState, FilterSou
         refreshSnapshot.traceMetadata = buildTraceMetadata(refreshSnapshot.rows, tracePath);
         refreshSnapshot.visibleChannels = collectVisibleChannels(refreshSnapshot.rows);
         refreshSnapshot.hasDecodedRows = rowsHaveDecodedData(refreshSnapshot.rows);
-        refreshSnapshot.fullDatasetHasDecodedRows = rowsHaveDecodedData(sourceRows);
+        refreshSnapshot.fullDatasetHasDecodedRows = rowsHaveDecodedData(*sourceRows);
         return refreshSnapshot;
       });
 }
@@ -1979,10 +1981,24 @@ void GuiApplication::renderOverviewPanel()
     }
     else if(progressSnapshot.totalBytes > 0U)
     {
-      const std::uint64_t parsedBytes = std::min(progressSnapshot.bytesParsed, progressSnapshot.totalBytes);
+      const std::uint64_t parsedRows = std::min(progressSnapshot.bytesParsed, progressSnapshot.totalBytes);
       progressFraction =
-          static_cast<float>(static_cast<double>(parsedBytes) / static_cast<double>(progressSnapshot.totalBytes));
-      progressLabel = std::to_string(parsedBytes) + " / " + std::to_string(progressSnapshot.totalBytes) + " rows checked";
+          static_cast<float>(static_cast<double>(parsedRows) / static_cast<double>(progressSnapshot.totalBytes));
+
+      if(traceTableViewModel_.activeOperation() == TraceTableViewModel::ActiveOperation::FilterFullDataset)
+      {
+        progressLabel =
+            "Filtering full rows: " + std::to_string(parsedRows) + " / " + std::to_string(progressSnapshot.totalBytes);
+      }
+      else if(traceTableViewModel_.activeOperation() == TraceTableViewModel::ActiveOperation::FilterCurrentMatches)
+      {
+        progressLabel =
+            "Refining current matches: " + std::to_string(parsedRows) + " / " + std::to_string(progressSnapshot.totalBytes);
+      }
+      else
+      {
+        progressLabel = std::to_string(parsedRows) + " / " + std::to_string(progressSnapshot.totalBytes) + " rows checked";
+      }
     }
 
     if(progressFraction > 0.0001F)
@@ -2291,9 +2307,10 @@ void GuiApplication::renderTraceTablePanel()
   }
 
   const auto rows = traceTableViewModel_.visibleRows();
-  if(rows.empty())
+  const std::vector<std::size_t> filteredRowIndices = filteredTraceRowIndices();
+  if(filteredRowIndices.empty())
   {
-    ImGui::TextDisabled("No rows to display.");
+    ImGui::TextDisabled(rows.empty() ? "No rows to display." : "All current rows are hidden by the column filter.");
     ImGui::End();
     return;
   }
@@ -2309,24 +2326,110 @@ void GuiApplication::renderTraceTablePanel()
     ImGui::TableSetupColumn("Frame");
     ImGui::TableSetupColumn("Payload");
     ImGui::TableSetupColumn("Decoded");
-    ImGui::TableHeadersRow();
+    ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TableHeader("Ordinal");
+    ImGui::TableSetColumnIndex(1);
+    ImGui::TableHeader("Timestamp");
+    ImGui::TableSetColumnIndex(2);
+    ImGui::TableHeader("CAN ID");
+    if(ImGui::BeginPopupContextItem("can_id_column_filter"))
+    {
+      bool didChangeColumnFilter = false;
+      std::vector<std::uint32_t> availableCanIds;
+      availableCanIds.reserve(rows.size());
+      for(const can_app::QueryResultRow &queryResultRow : rows)
+      {
+        if(std::find(availableCanIds.begin(), availableCanIds.end(), queryResultRow.canEvent.canId) == availableCanIds.end())
+        {
+          availableCanIds.push_back(queryResultRow.canEvent.canId);
+        }
+      }
+      std::sort(availableCanIds.begin(), availableCanIds.end());
+      if(ImGui::MenuItem("Enable All CAN IDs"))
+      {
+        traceTableColumnFilterState_.disabledCanIds.clear();
+        didChangeColumnFilter = true;
+      }
+      ImGui::Separator();
+      for(const std::uint32_t canId : availableCanIds)
+      {
+        if(ImGui::PushID(static_cast<int>(canId)); true)
+        {
+          bool isEnabled = traceTableColumnFilterState_.disabledCanIds.find(canId) ==
+                           traceTableColumnFilterState_.disabledCanIds.end();
+          const std::string label = formatCanId(canId);
+          if(ImGui::Checkbox(label.c_str(), &isEnabled))
+          {
+            didChangeColumnFilter = true;
+            if(isEnabled)
+            {
+              traceTableColumnFilterState_.disabledCanIds.erase(canId);
+            }
+            else
+            {
+              traceTableColumnFilterState_.disabledCanIds.insert(canId);
+            }
+          }
+          ImGui::PopID();
+        }
+      }
+      if(didChangeColumnFilter)
+      {
+        clearTraceTableSelection();
+      }
+      ImGui::EndPopup();
+    }
+    ImGui::TableSetColumnIndex(3);
+    ImGui::TableHeader("Channel");
+    ImGui::TableSetColumnIndex(4);
+    ImGui::TableHeader("Frame");
+    ImGui::TableSetColumnIndex(5);
+    ImGui::TableHeader("Payload");
+    ImGui::TableSetColumnIndex(6);
+    ImGui::TableHeader("Decoded");
+    if(ImGui::BeginPopupContextItem("decoded_column_filter"))
+    {
+      bool didChangeColumnFilter = false;
+      if(ImGui::MenuItem("Show All"))
+      {
+        traceTableColumnFilterState_.showDecodedRows = true;
+        traceTableColumnFilterState_.showUndecodedRows = true;
+        didChangeColumnFilter = true;
+      }
+      if(ImGui::Checkbox("Decoded rows", &traceTableColumnFilterState_.showDecodedRows))
+      {
+        didChangeColumnFilter = true;
+      }
+      if(ImGui::Checkbox("Undecoded rows", &traceTableColumnFilterState_.showUndecodedRows))
+      {
+        didChangeColumnFilter = true;
+      }
+      if(didChangeColumnFilter)
+      {
+        clearTraceTableSelection();
+      }
+      ImGui::EndPopup();
+    }
 
     ImGuiListClipper clipper;
-    clipper.Begin(static_cast<int>(rows.size()));
+    clipper.Begin(static_cast<int>(filteredRowIndices.size()));
     while(clipper.Step())
     {
       for(int rowIndex = clipper.DisplayStart; rowIndex < clipper.DisplayEnd; ++rowIndex)
       {
-        const can_app::QueryResultRow &queryResultRow = rows[static_cast<std::size_t>(rowIndex)];
+        const std::size_t baseRowIndex = filteredRowIndices[static_cast<std::size_t>(rowIndex)];
+        const can_app::QueryResultRow &queryResultRow = rows[baseRowIndex];
         ImGui::TableNextRow();
 
         ImGui::TableSetColumnIndex(0);
-        const bool isSelected = guiSession_.hasSelection && guiSession_.selectedRowIndex == static_cast<std::size_t>(rowIndex);
+        const bool isSelected = guiSession_.hasSelection && guiSession_.selectedRowIndex == baseRowIndex;
         char ordinalLabel[64];
         std::snprintf(ordinalLabel, sizeof(ordinalLabel), "%" PRIu64, queryResultRow.ordinal);
         if(ImGui::Selectable(ordinalLabel, isSelected, ImGuiSelectableFlags_SpanAllColumns))
         {
-          guiSession_.selectedRowIndex = static_cast<std::size_t>(rowIndex);
+          guiSession_.selectedRowIndex = baseRowIndex;
           guiSession_.hasSelection = true;
           syncSelection();
           timelineViewModel_.moveToTimestamp(queryResultRow.canEvent.timestampNs);
@@ -2440,6 +2543,44 @@ void GuiApplication::renderTransientActionPopup()
   ImGui::End();
 }
 
+std::vector<std::size_t> GuiApplication::filteredTraceRowIndices() const
+{
+  std::vector<std::size_t> filteredRowIndices;
+  const auto rows = traceTableViewModel_.visibleRows();
+  filteredRowIndices.reserve(rows.size());
+  for(std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex)
+  {
+    if(passesTraceColumnFilters(rows[rowIndex]))
+    {
+      filteredRowIndices.push_back(rowIndex);
+    }
+  }
+  return filteredRowIndices;
+}
+
+bool GuiApplication::passesTraceColumnFilters(const can_app::QueryResultRow &queryResultRow) const
+{
+  if(traceTableColumnFilterState_.disabledCanIds.find(queryResultRow.canEvent.canId) !=
+     traceTableColumnFilterState_.disabledCanIds.end())
+  {
+    return false;
+  }
+
+  if(queryResultRow.decodedMessage.has_value())
+  {
+    return traceTableColumnFilterState_.showDecodedRows;
+  }
+
+  return traceTableColumnFilterState_.showUndecodedRows;
+}
+
+void GuiApplication::clearTraceTableSelection()
+{
+  guiSession_.hasSelection = false;
+  guiSession_.selectedRowIndex = 0;
+  signalPanelViewModel_.setSelectedRow(nullptr);
+}
+
 void GuiApplication::showTransientActionPopup(const std::string &message)
 {
   transientPopupMessage_ = message;
@@ -2461,6 +2602,12 @@ void GuiApplication::syncSelection()
   {
     guiSession_.hasSelection = false;
     signalPanelViewModel_.setSelectedRow(nullptr);
+    return;
+  }
+
+  if(!passesTraceColumnFilters(rows[guiSession_.selectedRowIndex]))
+  {
+    clearTraceTableSelection();
     return;
   }
 

@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "can_app/can_app.hpp"
@@ -212,6 +213,13 @@ public:
   void render();
 
 private:
+  struct TableColumnFilterState
+  {
+    std::unordered_set<std::uint32_t> disabledCanIds;
+    bool showDecodedRows = true;
+    bool showUndecodedRows = true;
+  };
+
   bool initialize();
   void shutdown();
   void handlePendingRefresh();
@@ -222,6 +230,9 @@ private:
   void renderTraceTablePanel();
   void renderSignalPanel();
   void renderTransientActionPopup();
+  [[nodiscard]] std::vector<std::size_t> filteredTraceRowIndices() const;
+  [[nodiscard]] bool passesTraceColumnFilters(const can_app::QueryResultRow &queryResultRow) const;
+  void clearTraceTableSelection();
   void syncSessionFromDraft();
   void syncSelection();
   void showTransientActionPopup(const std::string &message);
@@ -247,6 +258,7 @@ private:
   bool isRunning_ = true;
   bool isInitialized_ = false;
   bool isRefreshPending_ = false;
+  TableColumnFilterState traceTableColumnFilterState_;
   std::string transientPopupMessage_;
   std::chrono::steady_clock::time_point transientPopupExpiry_{};
   std::chrono::steady_clock::time_point lastEditTime_{};
