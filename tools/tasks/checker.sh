@@ -4,9 +4,11 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 
+preset="$2"
+
 default_project_root="${repo_root}"
 project_root="${1:-${default_project_root}}"
-compile_db_dir="${2:-${repo_root}/build}"
+compile_db_dir="${repo_root}/build/${preset}"
 tool_path="${repo_root}/tools/programs/checkpp/checkpp"
 rules_path="${repo_root}/tools/programs/checkpp//config/rules.yaml"
 ignore_paths_path="${repo_root}/tools/programs/checkpp/config/ignore_paths.txt"

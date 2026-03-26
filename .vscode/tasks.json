@@ -26,7 +26,8 @@
             "command": "checker.sh",
             "type": "shell",
             "args": [
-                "${workspaceFolder}"
+                "${workspaceFolder}",
+                "${command:cmake.activeConfigurePresetName}"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"

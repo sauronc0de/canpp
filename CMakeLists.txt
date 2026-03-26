@@ -12,6 +12,7 @@ project(${ProjectName} VERSION 0.0.0 LANGUAGES C CXX)
 # C++ standard (target-level "features" would also work, but this is fine)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Colorize diagnostics under Ninja (or any generator)
 add_compile_options(
