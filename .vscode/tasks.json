@@ -23,7 +23,7 @@
         },
         {
             "label": "checker",
-            "command": "checker",
+            "command": "checker.sh",
             "type": "shell",
             "args": [
                 "${workspaceFolder}"

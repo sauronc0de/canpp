@@ -55,25 +55,6 @@ else
   echo "✅ Build succeeded"
 fi
 
-# -------------------- locate actual build dir if CMake used a different one --------------------
-# (We keep log_file unchanged; it's already collecting output in ${build_dir}/build.log)
-if [ ! -f "${build_dir}/CMakeCache.txt" ]; then
-  guessed="$(cmake --preset "${preset}" --log-level=NOTICE 2>/dev/null | grep -Eo 'Build files have been written to: .*' | sed 's/.*to: //')"
-  actual_build_dir="${guessed:-${build_dir}}"
-else
-  actual_build_dir="${build_dir}"
-fi
-cache="${actual_build_dir}/CMakeCache.txt"
-
-# -------------------- optional cache helpers (if present) --------------------
-if [ -f "${cache}" ]; then
-  get_cache_bool () {
-    local key="$1"
-    awk -F= -v k="$key" '$1 ~ k":" {print $2}' "${cache}" | tr -d '\r'
-  }
-  # (add any cache-based logic here if you need it)
-fi
-
 } > >(tee "${log_file}") 2>&1
 
 # Log both stdout and stderr to build.log (overwrite each run) while keeping console output

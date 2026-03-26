@@ -1,121 +1,110 @@
-FROM ubuntu:22.04
-RUN apt-get update -y
-RUN apt-get upgrade -y
-RUN apt-get install -y curl git
+FROM ubuntu:24.04
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ###############################################################################
-# Install C++ development environment 
+# Build arguments
 ###############################################################################
-# C++ environment and SDL2
-RUN apt-get install -y \
+ARG WORKSPACE_DIR=/workspaces/project
+ARG PROJECT_NAME=project
+ARG GO_VERSION=1.24.2
+ARG GENTLE_AI_VERSION=1.7.22
+ARG USERNAME=sauroncode
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+###############################################################################
+# Base system and development environment
+###############################################################################
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    sudo \
+    curl \
+    git \
+    tar \
+    xutils-dev \
+    build-essential \
     gcc \
     g++ \
     gcc-multilib \
     g++-multilib \
-    build-essential \
-    xutils-dev \
+    cmake \
+    ninja-build \
+    mingw-w64 \
+    gdb \
+    clang \
+    clang-format \
+    clang-tidy \
+    clangd \
+    clang-tools \
+    lldb \
+    lld \
+    llvm-dev \
+    libclang-dev \
+    libclang-cpp-dev \
+    libffi-dev \
+    libtinfo-dev \
+    zlib1g-dev \
+    libxml2-dev \
+    libyaml-cpp-dev \
+    libboost-all-dev \
+    libglew-dev \
     libsdl2-dev \
     libsdl2-gfx-dev \
     libsdl2-image-dev \
     libsdl2-mixer-dev \
     libsdl2-net-dev \
     libsdl2-ttf-dev \
-    libreadline6-dev \
-    libncurses5-dev \
-    mingw-w64 \
-    cmake
-
-# Add Ninja
-RUN apt-get install -y ninja-build
-
-# Add Lua
-RUN apt-get install -y lua5.4 liblua5.4-dev
-
-# Add clang compilers 
-RUN apt-get install -y clang gdb
-
-# Utilities
-RUN apt-get install -y clang-format clangd lldb clang-tidy
-
-# C++ style checker dependencies
-RUN apt install -y libyaml-cpp0.7
-
-# Install glew to work with OpenGL with VAOs, Shaders, ...
-RUN apt-get install -y libglew-dev
-
-# Plant to UML requirements
-RUN apt-get install -y openjdk-17-jdk graphviz
-
-# Install boost libraries
-RUN apt-get install -y libboost-all-dev
-
-# Install lld (Something to build link faster)
-RUN apt-get install -y lld
-
-###############################################################################
-# Cache configuration for faster builds
-###############################################################################
-
-# syntax=docker/dockerfile:1.6
-RUN apt-get update && apt-get install -y ccache
-RUN update-ccache-symlinks && ccache --set-config=cache_dir=/ccache --max-size=8G
+    lua5.4 \
+    liblua5.4-dev \
+    libreadline-dev \
+    libncurses-dev \
+    openjdk-17-jdk \
+    graphviz \
+    nodejs \
+    npm; \
+    rm -rf /var/lib/apt/lists/*
 
 ###############################################################################
 # User and permissions configuration
 ###############################################################################
-
-# Install sudo and create a user
-RUN apt-get install -y sudo
-# Create a non-root user 'sauroncode' with password '1234', grant sudo access without password
-RUN useradd -m sauroncode && echo "sauroncode:1234" | chpasswd && adduser sauroncode sudo
-RUN echo "%sudo ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-
-# Add user 'sauroncode' to plugdev and dialout groups for USB access
-RUN usermod -aG plugdev sauroncode && usermod -aG dialout sauroncode
-
-# Switch to 'sauroncode' user
-USER sauroncode
-
+RUN set -eux; \
+    if ! id -u "${USERNAME}" >/dev/null 2>&1; then \
+    if getent passwd "${USER_UID}" >/dev/null; then \
+    EXISTING_USER_BY_UID="$(getent passwd "${USER_UID}" | cut -d: -f1)"; \
+    usermod -l "${USERNAME}" "${EXISTING_USER_BY_UID}"; \
+    usermod -d "/home/${USERNAME}" -m "${USERNAME}"; \
+    else \
+    if getent group "${USER_GID}" >/dev/null; then \
+    EXISTING_GROUP="$(getent group "${USER_GID}" | cut -d: -f1)"; \
+    else \
+    groupadd --gid "${USER_GID}" "${USERNAME}"; \
+    EXISTING_GROUP="${USERNAME}"; \
+    fi; \
+    useradd --uid "${USER_UID}" --gid "${EXISTING_GROUP}" -m "${USERNAME}"; \
+    fi; \
+    fi; \
+    echo "${USERNAME}:1234" | chpasswd; \
+    usermod -aG sudo,plugdev,dialout "${USERNAME}"; \
+    grep -q '^%sudo ALL=(ALL) NOPASSWD: ALL$' /etc/sudoers || \
+    echo '%sudo ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
 ###############################################################################
-# Environment variables and PATH configuration
+# Environment variables and workspace
 ###############################################################################
-
-# Set the working directory in the container
-ARG WORKSPACE_DIR
 ENV WORKSPACE_DIR=${WORKSPACE_DIR}
-
-ARG PROJECT_NAME
 ENV PROJECT_NAME=${PROJECT_NAME}
+ENV XDG_RUNTIME_DIR=/tmp
+ENV PATH="${PATH}:${WORKSPACE_DIR}/tools/tasks:${WORKSPACE_DIR}/tools/programs"
+
 WORKDIR ${WORKSPACE_DIR}
 
-# Add directories on PATH variable
-ENV PATH="$PATH:$WORKSPACE_DIR/tools/tasks"
-ENV PATH="$PATH:$WORKSPACE_DIR/tools/programs"
-
-ENV XDG_RUNTIME_DIR=/tmp
-
 ###############################################################################
-# Install AI support with OpenCode and AI Gentle Stack
+# Go installation
 ###############################################################################
-
-# Need root for apt installs and global binary installation
-USER root
-
-# Need root for apt installs and global binary installation
-USER root
-
-# Install extra dependencies required by AI Gentle Stack
-RUN apt-get update && apt-get install -y \
-    curl \
-    nodejs \
-    npm \
-    ca-certificates \
-    tar \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Go 1.24.x manually because Ubuntu 22.04 ships an older version
-ARG GO_VERSION=1.24.2
 RUN set -eux; \
     cd /tmp; \
     curl -fsSLO "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"; \
@@ -125,8 +114,9 @@ RUN set -eux; \
 
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Install AI Gentle Stack from the GitHub release tarball
-ARG GENTLE_AI_VERSION=1.7.22
+###############################################################################
+# AI support - Gentle AI
+###############################################################################
 RUN set -eux; \
     cd /tmp; \
     curl -fsSLO "https://github.com/Gentleman-Programming/gentle-ai/releases/download/v${GENTLE_AI_VERSION}/gentle-ai_${GENTLE_AI_VERSION}_linux_amd64.tar.gz"; \
@@ -134,17 +124,15 @@ RUN set -eux; \
     install -m 0755 gentle-ai /usr/local/bin/gentle-ai; \
     rm -f "gentle-ai_${GENTLE_AI_VERSION}_linux_amd64.tar.gz" gentle-ai
 
-# Switch to container user so AI tooling installs in the correct user paths
-USER sauroncode
-ENV HOME=/home/sauroncode
+###############################################################################
+# User-level AI tooling
+###############################################################################
+USER ${USERNAME}
+ENV HOME=/home/${USERNAME}
+ENV PATH="${HOME}/.local/bin:${HOME}/go/bin:/usr/local/go/bin:${PATH}"
 
-# Ensure user-local binaries are on PATH
-ENV PATH="/home/sauroncode/.local/bin:/home/sauroncode/go/bin:${PATH}"
-
-# Install OpenCode 
 RUN curl -fsSL https://opencode.ai/install | bash
 
-# Execute AI Gentle Stack install command
 RUN gentle-ai install \
     --preset full-gentleman \
     --agents opencode \

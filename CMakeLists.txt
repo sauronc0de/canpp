@@ -6,8 +6,8 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
   set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 endif()
 
-set(ProjectName "Canpp")
-project(${ProjectName} LANGUAGES C CXX)
+set(ProjectName "canpp")
+project(${ProjectName} VERSION 0.0.0 LANGUAGES C CXX)
 
 # C++ standard (target-level "features" would also work, but this is fine)
 set(CMAKE_CXX_STANDARD 20)

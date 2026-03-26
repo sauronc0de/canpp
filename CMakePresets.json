@@ -8,9 +8,6 @@
       "hidden": true,
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
-      "environment": {
-        "CCACHE_BASEDIR": "${sourceDir}"
-      },
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
@@ -22,8 +19,8 @@
       "hidden": true,
       "inherits": "config-base",
       "cacheVariables": {
-        "CMAKE_C_COMPILER": "/usr/bin/gcc-11",
-        "CMAKE_CXX_COMPILER": "/usr/bin/g++-11"
+        "CMAKE_C_COMPILER": "/usr/bin/gcc",
+        "CMAKE_CXX_COMPILER": "/usr/bin/g++"
       }
     },
     {
@@ -48,8 +45,6 @@
         "CANPP_ENABLE_DEVELOP_DATA": "ON",
         "ENABLE_LOG": "ON",
         "ENABLE_RENDER": "ON",
-        "CMAKE_C_COMPILER_LAUNCHER": "ccache",
-        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
         "CMAKE_UNITY_BUILD": "ON",
         "CMAKE_UNITY_BUILD_BATCH_SIZE": "4",
         "CMAKE_CXX_FLAGS_DEBUG": "-O0 -g",
@@ -81,8 +76,6 @@
         "CMAKE_BUILD_TYPE": "Release",
         "ENABLE_LOG": "OFF",
         "ENABLE_RENDER": "ON",
-        "CMAKE_C_COMPILER_LAUNCHER": "ccache",
-        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
         "CMAKE_UNITY_BUILD": "OFF",
         "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
         "CMAKE_EXE_LINKER_FLAGS_RELEASE": "-fuse-ld=gold",
@@ -112,8 +105,6 @@
         "ENABLE_TEST": "ON",
         "ENABLE_LOG": "ON",
         "ENABLE_RENDER": "ON",
-        "CMAKE_C_COMPILER_LAUNCHER": "ccache",
-        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
         "CMAKE_UNITY_BUILD": "ON",
         "CMAKE_UNITY_BUILD_BATCH_SIZE": "4",
         "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g",

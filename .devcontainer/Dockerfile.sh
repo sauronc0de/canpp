@@ -50,11 +50,6 @@ sudo apt-get install -y libboost-all-dev
 # Install lld (Linker)
 sudo apt-get install -y lld
 
-# Install ccache and configure it
-# sudo apt-get install -y ccache
-# sudo update-ccache-symlinks
-# ccache --set-config=cache_dir=/ccache --max-size=8G
-
 # # Add directories to PATH
 export PATH="$PATH:$WORKSPACE_DIR/tools/tasks"
 export PATH="$PATH:$WORKSPACE_DIR/tools/programs"
