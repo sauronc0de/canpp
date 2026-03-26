@@ -10,7 +10,7 @@ default_project_root="${repo_root}"
 project_root="${1:-${default_project_root}}"
 compile_db_dir="${repo_root}/build/${preset}"
 tool_path="${repo_root}/tools/programs/checkpp/checkpp"
-rules_path="${repo_root}/tools/programs/checkpp//config/rules.yaml"
+rules_path="${repo_root}/tools/programs/checkpp/config/rules.yaml"
 ignore_paths_path="${repo_root}/tools/programs/checkpp/config/ignore_paths.txt"
 log_path="${compile_db_dir}/cpp_style_check.log"
 
@@ -39,16 +39,22 @@ if [ ! -f "${rules_path}" ]; then
   exit 1
 fi
 
+if [ ! -f "${ignore_paths_path}" ]; then
+  echo "ignore_paths.txt not found: ${ignore_paths_path}" >&2
+  exit 1
+fi
+
 echo "Running CheckPP C++ style check..."
 echo "Project root: ${project_root}"
 echo "Compile DB:   ${compile_db_dir}"
 echo "Rules:        ${rules_path}"
+echo "Ignore paths: ${ignore_paths_path}"
 echo "Log:          ${log_path}"
 
 mkdir -p "${compile_db_dir}"
 
 set +e
-"${tool_path}" "${project_root}" "${compile_db_dir}" "${rules_path}" 2>&1 | tee "${log_path}"
+"${tool_path}" "${project_root}" "${compile_db_dir}" "${rules_path}" --ignore-paths "${ignore_paths_path}" 2>&1 | tee "${log_path}"
 tool_exit_code=${PIPESTATUS[0]}
 set -e
 

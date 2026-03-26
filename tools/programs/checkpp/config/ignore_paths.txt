@@ -3,3 +3,6 @@
 _deps
 tools
 tests
+.cmake
+CMakeFiles
+ninja
