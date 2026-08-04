@@ -1,11 +1,22 @@
 #include "canpp/core/session.hpp"
 
 #include <charconv>
+#include <cctype>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
+
+#ifdef CANPP_TRACE_CLI_HAS_READLINE
+#include <cstring>
+#include <readline/history.h>
+#include <readline/readline.h>
+#endif
 
 namespace {
 
@@ -31,111 +42,372 @@ bool from_original(const std::vector<std::string>& args, std::size_t index) {
     return args.size() > index && args[index] == "original";
 }
 
+std::string raw_after_words(const std::string& line, std::size_t words) {
+    std::size_t position = 0;
+    std::size_t consumed = 0;
+    bool quoted = false;
+    char quote = '\0';
+    while (position < line.size() && consumed < words) {
+        while (position < line.size() && std::isspace(static_cast<unsigned char>(line[position]))) ++position;
+        if (position == line.size()) return {};
+        ++consumed;
+        while (position < line.size()) {
+            const char current = line[position++];
+            if (current == '\\' && position < line.size()) {
+                ++position;
+            } else if (quoted && current == quote) {
+                quoted = false;
+            } else if (!quoted && (current == '\'' || current == '"')) {
+                quoted = true;
+                quote = current;
+            } else if (!quoted && std::isspace(static_cast<unsigned char>(current))) {
+                break;
+            }
+        }
+    }
+    while (position < line.size() && std::isspace(static_cast<unsigned char>(line[position]))) ++position;
+    return line.substr(position);
+}
+
+bool remove_original_suffix(std::string& expression) {
+    while (!expression.empty() && std::isspace(static_cast<unsigned char>(expression.back()))) expression.pop_back();
+    bool quoted = false;
+    char quote = '\0';
+    std::size_t suffix = std::string::npos;
+    for (std::size_t index = 0; index < expression.size(); ++index) {
+        const char current = expression[index];
+        if (current == '\\' && index + 1U < expression.size()) {
+            ++index;
+        } else if (quoted && current == quote) {
+            quoted = false;
+        } else if (!quoted && (current == '\'' || current == '"')) {
+            quoted = true;
+            quote = current;
+        } else if (!quoted && std::isspace(static_cast<unsigned char>(current))) {
+            suffix = index;
+        }
+    }
+    if (suffix == std::string::npos) return false;
+    const auto tail = expression.substr(suffix);
+    const auto first = tail.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos || tail.substr(first) != "original") return false;
+    expression.resize(suffix);
+    while (!expression.empty() && std::isspace(static_cast<unsigned char>(expression.back()))) expression.pop_back();
+    return true;
+}
+
 void print_help() {
     std::cout
         << "import asc <input.asc> <output.commtrace>\n"
         << "open <file.commtrace>\n"
+        << "load dbc <file.dbc>\n"
         << "status | reset\n"
         << "filter protocol can [original]\n"
         << "filter direction rx|tx [original]\n"
         << "filter payload <offset> <hex-byte> [original]\n"
         << "filter can id <hex-id> [original]\n"
         << "filter can name <message-name> [original]\n"
+        << "filter can signal <signal-name> [original]\n"
+        << "filter <expression> [original]\n"
+        << "filter range <event-expression> [original]\n"
+        << "  refs: signal.<Name>, message.name/id/extended, record.stream_id/protocol/direction, timestamp_ns, time\n"
+        << "  ops: == != < <= > >= && || ! (precedence: !, comparison, &&, ||)\n"
         << "print [limit] [offset]\n"
         << "save <output.commtrace>\n"
         << "exit\n";
 }
+
+bool execute_line(canpp::core::Session& session, const std::string& line) {
+    const auto args = split(line);
+    if (args.empty()) {
+        return true;
+    }
+    std::string error;
+    bool success = false;
+    if (args[0] == "exit" || args[0] == "quit") {
+        return false;
+    }
+    if (args[0] == "help") {
+        print_help();
+        return true;
+    }
+    if (args[0] == "status") {
+        session.status(std::cout);
+        return true;
+    }
+    if (args[0] == "reset") {
+        session.reset();
+        session.status(std::cout);
+        return true;
+    }
+    if (args[0] == "open" && args.size() == 2U) {
+        success = session.open(args[1], error);
+    } else if (args[0] == "load" && args.size() == 3U && args[1] == "dbc") {
+        success = session.load_dbc(args[2], error);
+    } else if (args[0] == "import" && args.size() == 4U && args[1] == "asc") {
+        canpp::protocol::can::ImportStats stats;
+        success = session.import_can_asc(args[2], args[3], stats, error);
+        if (success) {
+            std::cout << "Imported " << stats.imported << ", skipped " << stats.skipped << '\n';
+        }
+    } else if (args[0] == "save" && args.size() == 2U) {
+        success = session.save(args[1], error);
+    } else if (args[0] == "print") {
+        std::size_t limit = 20;
+        std::size_t offset = 0;
+        if ((args.size() > 1U && !parse_number(args[1], limit, 10)) ||
+            (args.size() > 2U && !parse_number(args[2], offset, 10))) {
+            std::cerr << "Invalid print range\n";
+            return true;
+        }
+        session.print(std::cout, limit, offset);
+        return true;
+    } else if (args[0] == "filter" && args.size() >= 2U) {
+        if (args[1] == "range") {
+            auto expression = raw_after_words(line, 2U);
+            const bool original = remove_original_suffix(expression);
+            if (expression.empty()) {
+                std::cerr << "Usage: filter range <event-expression> [original]\n";
+                return true;
+            }
+            success = session.filter_range(expression, original, error);
+        } else if (args[1] == "protocol" && args.size() >= 3U && args[2] == "can") {
+            success = session.filter_protocol(canpp::trace::ProtocolId::can,
+                                              from_original(args, 3), error);
+        } else if (args[1] == "direction" && args.size() >= 3U) {
+            const auto direction = args[2] == "rx" ? canpp::trace::Direction::rx
+                                 : args[2] == "tx" ? canpp::trace::Direction::tx
+                                                   : canpp::trace::Direction::unknown;
+            if (direction == canpp::trace::Direction::unknown) {
+                std::cerr << "Direction must be rx or tx\n";
+                return true;
+            }
+            success = session.filter_direction(direction, from_original(args, 3), error);
+        } else if (args[1] == "payload" && args.size() >= 4U) {
+            std::size_t offset{};
+            unsigned int value{};
+            if (!parse_number(args[2], offset, 10) || !parse_number(args[3], value, 16) || value > 255U) {
+                std::cerr << "Usage: filter payload <offset> <hex-byte> [original]\n";
+                return true;
+            }
+            success = session.filter_payload_byte(offset, static_cast<std::uint8_t>(value),
+                                                  from_original(args, 4), error);
+        } else if (args[1] == "can" && args.size() >= 4U && args[2] == "id") {
+            std::uint32_t id{};
+            if (!parse_number(args[3], id, 16)) {
+                std::cerr << "Invalid CAN ID\n";
+                return true;
+            }
+            success = session.filter_can_id(id, from_original(args, 4), error);
+        } else if (args[1] == "can" && args.size() >= 4U && args[2] == "name") {
+            success = session.filter_can_name(args[3], from_original(args, 4), error);
+        } else if (args[1] == "can" && args.size() >= 4U && args[2] == "signal") {
+            success = session.filter_can_signal(args[3], from_original(args, 4), error);
+        } else {
+            auto expression = raw_after_words(line, 1U);
+            const bool original = remove_original_suffix(expression);
+            if (expression.empty()) {
+                std::cerr << "Usage: filter <expression> [original]\n";
+                return true;
+            }
+            success = session.filter_expression(expression, original, error);
+        }
+    } else {
+        std::cerr << "Unknown command\n";
+        return true;
+    }
+
+    if (!success) {
+        std::cerr << "Error: " << (error.empty() ? "invalid command" : error) << '\n';
+    } else {
+        session.status(std::cout);
+    }
+    return true;
+}
+
+#ifdef CANPP_TRACE_CLI_HAS_READLINE
+
+const std::vector<std::string> top_level_commands{
+    "import", "open", "load", "status", "reset", "filter", "print", "save", "exit", "quit", "help"};
+
+canpp::core::Session* completion_session = nullptr;
+std::vector<std::string> completion_values;
+std::size_t completion_index = 0;
+
+std::vector<std::string> signal_completion_candidates() {
+    std::vector<std::string> candidates;
+    if (completion_session == nullptr) {
+        return candidates;
+    }
+    for (const auto& name : completion_session->dbc_signal_names()) {
+        candidates.push_back("signal." + name);
+    }
+    return candidates;
+}
+
+std::vector<std::string> completion_candidates(const std::string& line,
+                                               const std::string& text,
+                                               int start) {
+    const auto prefix = line.substr(0, static_cast<std::size_t>(start));
+    auto completed = split(prefix);
+    const bool current_word_is_partial =
+        start == 0 || (start > 0 && !std::isspace(static_cast<unsigned char>(line[static_cast<std::size_t>(start - 1)])));
+    if (current_word_is_partial && !completed.empty()) {
+        completed.pop_back();
+    }
+    if (completed.empty()) {
+        return top_level_commands;
+    }
+    if (completed.size() == 1U && completed[0] == "load") {
+        return {"dbc"};
+    }
+    if (completed.size() == 1U && completed[0] == "import") {
+        return {"asc"};
+    }
+    if (completed.size() == 1U && completed[0] == "filter") {
+        // Readline's `start` points at the current token, so use `text`
+        // directly instead of relying on the completed prefix. This keeps
+        // direct expression completion working for `filter signal.<prefix>`.
+        if (text.rfind("signal.", 0U) == 0U) {
+            return signal_completion_candidates();
+        }
+        return {"protocol", "direction", "payload", "can", "range", "signal.", "message.", "record.", "timestamp_ns", "time"};
+    }
+    if (completed.size() == 2U && completed[0] == "filter") {
+        if (completed[1] == "range") {
+            return {"signal.", "message.", "record.", "timestamp_ns", "time", "original"};
+        }
+        if (completed[1].rfind("signal.", 0U) == 0U) {
+            return signal_completion_candidates();
+        }
+        if (completed[1] == "protocol") {
+            return {"can"};
+        }
+        if (completed[1] == "direction") {
+            return {"rx", "tx"};
+        }
+        if (completed[1] == "can") {
+            return {"id", "name", "signal"};
+        }
+    }
+    if (completed.size() == 3U && completed[0] == "filter" && completed[1] == "can") {
+        if (completed[2] == "name" && completion_session != nullptr) {
+            return completion_session->dbc_message_names();
+        }
+        if (completed[2] == "signal" && completion_session != nullptr) {
+            return completion_session->dbc_signal_names();
+        }
+    }
+    return {};
+}
+
+char* completion_generator(const char* text, int state) {
+    if (state == 0) {
+        completion_index = 0;
+    }
+    const std::string_view prefix(text);
+    while (completion_index < completion_values.size()) {
+        const auto& candidate = completion_values[completion_index++];
+        if (candidate.size() < prefix.size() || candidate.compare(0, prefix.size(), prefix) != 0) {
+            continue;
+        }
+        auto* result = static_cast<char*>(std::malloc(candidate.size() + 1U));
+        if (result == nullptr) {
+            return nullptr;
+        }
+        std::memcpy(result, candidate.c_str(), candidate.size() + 1U);
+        return result;
+    }
+    return nullptr;
+}
+
+char** complete_line(const char* text, int start, int /*end*/) {
+    completion_values = completion_candidates(rl_line_buffer, text, start);
+    rl_attempted_completion_over = 1;
+    if (completion_values.empty()) {
+        return nullptr;
+    }
+    return rl_completion_matches(text, completion_generator);
+}
+
+std::filesystem::path history_path() {
+    if (const auto* state_home = std::getenv("XDG_STATE_HOME"); state_home != nullptr && *state_home != '\0') {
+        return std::filesystem::path(state_home) / "canpp_history";
+    }
+    if (const auto* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
+        return std::filesystem::path(home) / ".canpp_history";
+    }
+    return {};
+}
+
+void initialize_history() {
+    const auto path = history_path();
+    if (path.empty()) {
+        return;
+    }
+    std::error_code error;
+    if (!path.parent_path().empty()) {
+        std::filesystem::create_directories(path.parent_path(), error);
+    }
+    (void)read_history(path.c_str());
+}
+
+void save_history() {
+    const auto path = history_path();
+    if (!path.empty()) {
+        (void)write_history(path.c_str());
+    }
+}
+
+void configure_completion() {
+    // Keep the dot in direct signal references as part of the completion word;
+    // otherwise readline passes only the suffix after `signal.` to us.
+    static constexpr char default_word_break_characters[] = " \t\n\\\"'`@$><=;|&{";
+    static std::string word_break_characters = rl_completer_word_break_characters != nullptr
+                                                    ? rl_completer_word_break_characters
+                                                    : default_word_break_characters;
+    for (auto position = word_break_characters.find('.');
+         position != std::string::npos;
+         position = word_break_characters.find('.')) {
+        word_break_characters.erase(position, 1U);
+    }
+    rl_completer_word_break_characters = word_break_characters.c_str();
+}
+
+#endif
 
 } // namespace
 
 int main() {
     canpp::core::Session session;
     std::cout << "Canpp communication trace CLI - type 'help'\n";
-    for (std::string line; std::cout << "canpp> " && std::getline(std::cin, line);) {
-        const auto args = split(line);
-        if (args.empty()) {
-            continue;
-        }
-        std::string error;
-        bool success = false;
-        if (args[0] == "exit" || args[0] == "quit") {
+#ifdef CANPP_TRACE_CLI_HAS_READLINE
+    completion_session = &session;
+    rl_attempted_completion_function = complete_line;
+    configure_completion();
+    initialize_history();
+    for (;;) {
+        std::cout.flush();
+        char* raw_line = readline("canpp> ");
+        if (raw_line == nullptr) {
             break;
         }
-        if (args[0] == "help") {
-            print_help();
-            continue;
+        std::string line(raw_line);
+        std::free(raw_line);
+        if (!line.empty()) {
+            add_history(line.c_str());
         }
-        if (args[0] == "status") {
-            session.status(std::cout);
-            continue;
-        }
-        if (args[0] == "reset") {
-            session.reset();
-            session.status(std::cout);
-            continue;
-        }
-        if (args[0] == "open" && args.size() == 2U) {
-            success = session.open(args[1], error);
-        } else if (args[0] == "import" && args.size() == 4U && args[1] == "asc") {
-            canpp::protocol::can::ImportStats stats;
-            success = session.import_can_asc(args[2], args[3], stats, error);
-            if (success) {
-                std::cout << "Imported " << stats.imported << ", skipped " << stats.skipped << '\n';
-            }
-        } else if (args[0] == "save" && args.size() == 2U) {
-            success = session.save(args[1], error);
-        } else if (args[0] == "print") {
-            std::size_t limit = 20;
-            std::size_t offset = 0;
-            if ((args.size() > 1U && !parse_number(args[1], limit, 10)) ||
-                (args.size() > 2U && !parse_number(args[2], offset, 10))) {
-                std::cerr << "Invalid print range\n";
-                continue;
-            }
-            session.print(std::cout, limit, offset);
-            continue;
-        } else if (args[0] == "filter" && args.size() >= 3U) {
-            if (args[1] == "protocol" && args[2] == "can") {
-                success = session.filter_protocol(canpp::trace::ProtocolId::can,
-                                                  from_original(args, 3), error);
-            } else if (args[1] == "direction") {
-                const auto direction = args[2] == "rx" ? canpp::trace::Direction::rx
-                                     : args[2] == "tx" ? canpp::trace::Direction::tx
-                                                       : canpp::trace::Direction::unknown;
-                if (direction == canpp::trace::Direction::unknown) {
-                    std::cerr << "Direction must be rx or tx\n";
-                    continue;
-                }
-                success = session.filter_direction(direction, from_original(args, 3), error);
-            } else if (args[1] == "payload" && args.size() >= 4U) {
-                std::size_t offset{};
-                unsigned int value{};
-                if (!parse_number(args[2], offset, 10) || !parse_number(args[3], value, 16) || value > 255U) {
-                    std::cerr << "Usage: filter payload <offset> <hex-byte> [original]\n";
-                    continue;
-                }
-                success = session.filter_payload_byte(offset, static_cast<std::uint8_t>(value),
-                                                      from_original(args, 4), error);
-            } else if (args[1] == "can" && args.size() >= 4U && args[2] == "id") {
-                std::uint32_t id{};
-                if (!parse_number(args[3], id, 16)) {
-                    std::cerr << "Invalid CAN ID\n";
-                    continue;
-                }
-                success = session.filter_can_id(id, from_original(args, 4), error);
-            } else if (args[1] == "can" && args.size() >= 4U && args[2] == "name") {
-                success = session.filter_can_name(args[3], from_original(args, 4), error);
-            }
-        } else {
-            std::cerr << "Unknown command\n";
-            continue;
-        }
-
-        if (!success) {
-            std::cerr << "Error: " << (error.empty() ? "invalid command" : error) << '\n';
-        } else {
-            session.status(std::cout);
+        if (!execute_line(session, line)) {
+            break;
         }
     }
+    save_history();
+#else
+    for (std::string line; std::cout << "canpp> " && std::getline(std::cin, line);) {
+        if (!execute_line(session, line)) {
+            break;
+        }
+    }
+#endif
     return 0;
 }

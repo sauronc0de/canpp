@@ -28,6 +28,10 @@ bool Session::import_can_asc(const std::filesystem::path& input,
     return open(output, error);
 }
 
+bool Session::load_dbc(const std::filesystem::path& path, std::string& error) {
+    return dbc_.load(path, error);
+}
+
 void Session::reset() {
     selection_.resize(static_cast<std::size_t>(reader_.size()));
     std::iota(selection_.begin(), selection_.end(), std::uint64_t{0});
@@ -86,10 +90,85 @@ bool Session::filter_can_id(std::uint32_t id, bool original, std::string& error)
 }
 
 bool Session::filter_can_name(const std::string& name, bool original, std::string& error) {
-    return apply_filter([&name](const trace::Record& record) {
+    return apply_filter([this, &name](const trace::Record& record) {
         const auto frame = protocol::can::decode(record);
-        return frame && frame->message_name == name;
+        if (!frame) {
+            return false;
+        }
+        if (!dbc_.empty()) {
+            const auto* message = dbc_.find_message(frame->can_id, frame->extended);
+            return message != nullptr && message->name == name;
+        }
+        return frame->message_name == name;
     }, original, error);
+}
+
+bool Session::filter_can_signal(const std::string& signal_name, bool original, std::string& error) {
+    if (dbc_.empty()) {
+        error = "No DBC database is loaded";
+        return false;
+    }
+    return apply_filter([this, &signal_name](const trace::Record& record) {
+        const auto frame = protocol::can::decode(record);
+        return frame && dbc_.has_signal(frame->can_id, frame->extended, signal_name, frame->data);
+    }, original, error);
+}
+
+bool Session::filter_expression(const std::string& expression, bool original, std::string& error) {
+    auto parsed = Query::parse(expression, error);
+    if (!parsed) {
+        return false;
+    }
+    auto query = std::move(*parsed);
+    return apply_filter([this, query = std::move(query)](const trace::Record& record) {
+        return query.matches(record, dbc_);
+    }, original, error);
+}
+
+bool Session::filter_range(const std::string& expression, bool original, std::string& error) {
+    auto parsed = Query::parse(expression, error);
+    if (!parsed) {
+        return false;
+    }
+    if (!has_trace()) {
+        error = "No communication trace is open";
+        return false;
+    }
+
+    const auto count = original ? reader_.size() : static_cast<std::uint64_t>(selection_.size());
+    std::vector<std::uint64_t> source;
+    source.reserve(static_cast<std::size_t>(count));
+    if (original) {
+        for (std::uint64_t index = 0; index < count; ++index) {
+            source.push_back(index);
+        }
+    } else {
+        source = selection_;
+    }
+
+    std::vector<std::uint64_t> result;
+    auto query = std::move(*parsed);
+    std::optional<std::uint64_t> begin;
+    for (std::size_t position = 0; position < source.size(); ++position) {
+        const auto source_index = source[position];
+        const auto record = reader_.read(source_index);
+        if (!record) {
+            error = "Cannot read record " + std::to_string(source_index);
+            return false;
+        }
+        if (!query.matches(*record, dbc_)) {
+            continue;
+        }
+        if (begin) {
+            for (std::size_t interior = static_cast<std::size_t>(*begin) + 1U;
+                 interior < position; ++interior) {
+                result.push_back(source[interior]);
+            }
+        }
+        begin = static_cast<std::uint64_t>(position);
+    }
+    selection_ = std::move(result);
+    return true;
 }
 
 bool Session::save(const std::filesystem::path& output, std::string& error) const {
@@ -119,6 +198,25 @@ void Session::print(std::ostream& output, std::size_t limit, std::size_t offset)
                 output << ' ' << std::hex << std::setw(2) << std::setfill('0')
                        << static_cast<unsigned>(byte);
             }
+            if (!dbc_.empty()) {
+                const auto values = dbc_.decode(frame->can_id, frame->extended, frame->data);
+                for (const auto& value : values) {
+                    output << ' ' << value.name << '=';
+                    if (value.description) {
+                        output << *value.description << " (" << std::fixed << std::setprecision(6)
+                               << value.value;
+                        if (!value.unit.empty()) {
+                            output << ' ' << value.unit;
+                        }
+                        output << ')';
+                    } else {
+                        output << std::fixed << std::setprecision(6) << value.value;
+                        if (!value.unit.empty()) {
+                            output << ' ' << value.unit;
+                        }
+                    }
+                }
+            }
             output << std::dec << std::setfill(' ') << '\n';
         } else {
             output << std::fixed << std::setprecision(6)
@@ -138,9 +236,15 @@ void Session::status(std::ostream& output) const {
     output << "File: " << reader_.path() << '\n'
            << "Records: " << reader_.size() << '\n'
            << "Current selection: " << selection_.size() << '\n';
+    if (!dbc_.empty()) {
+        output << "DBC: " << dbc_.path() << '\n';
+    }
 }
 
 bool Session::has_trace() const { return reader_.is_open(); }
 std::size_t Session::selection_size() const { return selection_.size(); }
+
+std::vector<std::string> Session::dbc_message_names() const { return dbc_.message_names(); }
+std::vector<std::string> Session::dbc_signal_names() const { return dbc_.signal_names(); }
 
 } // namespace canpp::core

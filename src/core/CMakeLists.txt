@@ -1,4 +1,5 @@
 add_library(canpp_trace_core STATIC
+  src/query.cpp
   src/session.cpp
 )
 add_library(canpp::trace_core ALIAS canpp_trace_core)
@@ -13,6 +14,7 @@ target_link_libraries(canpp_trace_core
   PUBLIC
     canpp::trace
     canpp::protocol_can
+    canpp::project_options
 )
 
 target_compile_features(canpp_trace_core PUBLIC cxx_std_23)

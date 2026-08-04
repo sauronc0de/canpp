@@ -1,6 +1,8 @@
 #pragma once
 
 #include "canpp/protocol/can/asc_importer.hpp"
+#include "canpp/core/query.hpp"
+#include "canpp/protocol/can/dbc.hpp"
 #include "canpp/trace/binary_trace.hpp"
 
 #include <cstddef>
@@ -19,6 +21,7 @@ public:
                         const std::filesystem::path& output,
                         protocol::can::ImportStats& stats,
                         std::string& error);
+    bool load_dbc(const std::filesystem::path& path, std::string& error);
 
     void reset();
     bool filter_protocol(trace::ProtocolId protocol, bool original, std::string& error);
@@ -29,6 +32,9 @@ public:
                              std::string& error);
     bool filter_can_id(std::uint32_t id, bool original, std::string& error);
     bool filter_can_name(const std::string& name, bool original, std::string& error);
+    bool filter_can_signal(const std::string& signal_name, bool original, std::string& error);
+    bool filter_expression(const std::string& expression, bool original, std::string& error);
+    bool filter_range(const std::string& expression, bool original, std::string& error);
 
     bool save(const std::filesystem::path& output, std::string& error) const;
     void print(std::ostream& output, std::size_t limit = 20, std::size_t offset = 0) const;
@@ -36,6 +42,8 @@ public:
 
     [[nodiscard]] bool has_trace() const;
     [[nodiscard]] std::size_t selection_size() const;
+    [[nodiscard]] std::vector<std::string> dbc_message_names() const;
+    [[nodiscard]] std::vector<std::string> dbc_signal_names() const;
 
 private:
     template <typename Predicate>
@@ -43,6 +51,7 @@ private:
 
     trace::BinaryTraceReader reader_;
     std::vector<std::uint64_t> selection_;
+    protocol::can::DbcDatabase dbc_;
 };
 
 } // namespace canpp::core

@@ -216,6 +216,10 @@ endif()
 
 add_subdirectory(src/app)
 
+if(ENABLE_TEST)
+  add_subdirectory(tests)
+endif()
+
 if(EXISTS "${CMAKE_SOURCE_DIR}/examples/CMakeLists.txt")
   add_subdirectory(examples)
 endif()
