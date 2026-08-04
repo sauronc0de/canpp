@@ -198,12 +198,6 @@ set(TREE_SITTER_CPP_HIGHLIGHTS_QUERY "${TREE_SITTER_C_HIGHLIGHTS_QUERY}\n${TREE_
 file(READ "${tree_sitter_python_fc_SOURCE_DIR}/queries/highlights.scm" TREE_SITTER_PYTHON_HIGHLIGHTS_QUERY)
 file(READ "${tree_sitter_bash_fc_SOURCE_DIR}/queries/highlights.scm" TREE_SITTER_BASH_HIGHLIGHTS_QUERY)
 
-configure_file(
-  ${PROJECT_SOURCE_DIR}/src/render/markdown_code_highlight/tree_sitter_queries.hpp.in
-  ${CMAKE_BINARY_DIR}/generated/tree_sitter_queries.hpp
-  @ONLY
-)
-
 add_library(tree_sitter_queries INTERFACE)
 target_include_directories(tree_sitter_queries INTERFACE ${CMAKE_BINARY_DIR}/generated)
 
