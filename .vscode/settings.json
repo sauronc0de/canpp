@@ -1,5 +1,5 @@
 {
-    "editor.formatOnSave": true,
+    "editor.formatOnSave": false,
     "search.exclude": {
         "examples": true,
         "libraries": true
@@ -75,28 +75,6 @@
             },
             {
                 "cwd": "", // Terminal initial folder ${workspaceFolder} and os user home as defaults
-                "name": "🧪 Test",
-                "color": "#2196F3",
-                "singleInstance": true,
-                "useVsCodeApi": true,
-                "command": "workbench.action.tasks.runTask",
-                "args": [
-                    "test_all.sh"
-                ]
-            },
-            {
-                "cwd": "", // Terminal initial folder ${workspaceFolder} and os user home as defaults
-                "name": "🔎 Checker",
-                "color": "#00BCD4",
-                "singleInstance": true,
-                "useVsCodeApi": true,
-                "command": "workbench.action.tasks.runTask",
-                "args": [
-                    "checker"
-                ]
-            },
-            {
-                "cwd": "", // Terminal initial folder ${workspaceFolder} and os user home as defaults
                 "name": "🧩 Dependences",
                 "color": "#FFC107",
                 "singleInstance": true,
@@ -104,14 +82,10 @@
             },
             {
                 "cwd": "", // Terminal initial folder ${workspaceFolder} and os user home as defaults
-                "name": "🌐 OC Web",
-                "color": "#3F51B5",
+                "name": "✅ Check",
+                "color": "#2196F3",
                 "singleInstance": true,
-                "useVsCodeApi": true,
-                "command": "workbench.action.tasks.runTask",
-                "args": [
-                    "run_opencode_web_gui.sh"
-                ]
+                "command": "merge_check.sh"
             }
         ],
     },
@@ -197,4 +171,6 @@
         "shared_mutex": "cpp",
         "*.inc": "cpp"
     },
+    "claudeCode.allowDangerouslySkipPermissions": true,
+    "claudeCode.initialPermissionMode": "bypassPermissions"
 }

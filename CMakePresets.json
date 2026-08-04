@@ -8,6 +8,9 @@
       "hidden": true,
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
+      "environment": {
+        "CCACHE_BASEDIR": "${sourceDir}"
+      },
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
@@ -19,8 +22,8 @@
       "hidden": true,
       "inherits": "config-base",
       "cacheVariables": {
-        "CMAKE_C_COMPILER": "/usr/bin/gcc",
-        "CMAKE_CXX_COMPILER": "/usr/bin/g++"
+        "CMAKE_C_COMPILER": "/usr/bin/gcc-13",
+        "CMAKE_CXX_COMPILER": "/usr/bin/g++-13"
       }
     },
     {
@@ -30,6 +33,9 @@
       "hidden": true,
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
+      "environment": {
+        "PATH": "C:/msys64/ucrt64/bin;C:/msys64/usr/bin;$penv{PATH}"
+      },
       "cacheVariables": {
         "CMAKE_C_COMPILER": "C:/msys64/ucrt64/bin/gcc.exe",
         "CMAKE_CXX_COMPILER": "C:/msys64/ucrt64/bin/g++.exe",
@@ -42,49 +48,22 @@
       "inherits": "config-linux",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CANPP_ENABLE_DEVELOP_DATA": "ON",
         "ENABLE_LOG": "ON",
         "ENABLE_RENDER": "ON",
+        "CMAKE_C_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
         "CMAKE_UNITY_BUILD": "ON",
         "CMAKE_UNITY_BUILD_BATCH_SIZE": "4",
         "CMAKE_CXX_FLAGS_DEBUG": "-O0 -g",
         "CMAKE_EXE_LINKER_FLAGS_DEBUG": "-fuse-ld=lld",
-        "CMAKE_SHARED_LINKER_FLAGS_DEBUG": "-fuse-ld=lld"
-      }
-    },
-    {
-      "name": "develop_console",
-      "displayName": "⌨️ Develop",
-      "inherits": "config-linux",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CANPP_ENABLE_DEVELOP_DATA": "ON",
-        "ENABLE_LOG": "ON",
-        "ENABLE_RENDER": "OFF",
-        "CMAKE_UNITY_BUILD": "ON",
-        "CMAKE_UNITY_BUILD_BATCH_SIZE": "4",
-        "CMAKE_CXX_FLAGS_DEBUG": "-Og -g",
-        "CMAKE_EXE_LINKER_FLAGS_DEBUG": "-fuse-ld=lld",
-        "CMAKE_SHARED_LINKER_FLAGS_DEBUG": "-fuse-ld=lld"
-      }
-    },
-    {
-      "name": "Release",
-      "displayName": "✅ Release",
-      "inherits": "config-linux",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "ENABLE_LOG": "OFF",
-        "ENABLE_RENDER": "ON",
-        "CMAKE_UNITY_BUILD": "OFF",
-        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
-        "CMAKE_EXE_LINKER_FLAGS_RELEASE": "-fuse-ld=gold",
-        "CMAKE_SHARED_LINKER_FLAGS_RELEASE": "-fuse-ld=gold"
+        "CMAKE_SHARED_LINKER_FLAGS_DEBUG": "-fuse-ld=lld",
+        "USE_PORTABLE_PATHS": "OFF"
       }
     },
     {
       "name": "Release_mingw",
-      "displayName": "✅ Release (MinGW)",
+      "displayName": "🪟 Release (Windows)",
+      "description": "📦 Builds with minGW an .exe package for Windows 10/11",
       "inherits": "config-mingw",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
@@ -93,7 +72,31 @@
         "CMAKE_UNITY_BUILD": "OFF",
         "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
         "CMAKE_EXE_LINKER_FLAGS_RELEASE": "",
-        "CMAKE_SHARED_LINKER_FLAGS_RELEASE": ""
+        "CMAKE_SHARED_LINKER_FLAGS_RELEASE": "",
+        "USE_PORTABLE_PATHS": "ON"
+      }
+    },
+    {
+      "name": "Release_debian",
+      "displayName": "🐧 Release (Debian)",
+      "description": "📦 Builds a .deb package for Ubuntu/Debian/Mint",
+      "inherits": "config-linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ENABLE_LOG": "OFF",
+        "ENABLE_RENDER": "ON",
+        "CMAKE_C_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_UNITY_BUILD": "OFF",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+        "CMAKE_EXE_LINKER_FLAGS_RELEASE": "-fuse-ld=gold",
+        "CMAKE_SHARED_LINKER_FLAGS_RELEASE": "-fuse-ld=gold",
+        "USE_PORTABLE_PATHS": "ON",
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/develop_gui/_deps",
+        "CANPP_ASSETS_PATH": "/usr/share/canpp/assets",
+        "CANPP_DATA_PATH": "/usr/share/canpp/data",
+        "CMAKE_INSTALL_PREFIX": "/usr",
+        "ENABLE_DEB_PACKAGE": "ON"
       }
     },
     {
@@ -105,11 +108,14 @@
         "ENABLE_TEST": "ON",
         "ENABLE_LOG": "ON",
         "ENABLE_RENDER": "ON",
+        "CMAKE_C_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
         "CMAKE_UNITY_BUILD": "ON",
         "CMAKE_UNITY_BUILD_BATCH_SIZE": "4",
         "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g",
         "CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO": "-fuse-ld=lld",
-        "CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO": "-fuse-ld=lld"
+        "CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO": "-fuse-ld=lld",
+        "USE_PORTABLE_PATHS": "OFF"
       }
     }
   ],
@@ -120,18 +126,13 @@
       "jobs": 16
     },
     {
-      "name": "develop_console",
-      "configurePreset": "develop_console",
-      "jobs": 16
-    },
-    {
-      "name": "Release",
-      "configurePreset": "Release",
+      "name": "Release_mingw",
+      "configurePreset": "Release_mingw",
       "jobs": 0
     },
     {
-      "name": "Release_mingw",
-      "configurePreset": "Release_mingw",
+      "name": "Release_debian",
+      "configurePreset": "Release_debian",
       "jobs": 0
     },
     {
@@ -150,24 +151,16 @@
       }
     },
     {
-      "name": "develop_console",
-      "configurePreset": "develop_console",
-      "output": {
-        "shortProgress": true,
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "Release",
-      "configurePreset": "Release",
-      "output": {
-        "shortProgress": true,
-        "outputOnFailure": true
-      }
-    },
-    {
       "name": "Release_mingw",
       "configurePreset": "Release_mingw",
+      "output": {
+        "shortProgress": true,
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "Release_debian",
+      "configurePreset": "Release_debian",
       "output": {
         "shortProgress": true,
         "outputOnFailure": true

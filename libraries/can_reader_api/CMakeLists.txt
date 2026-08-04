@@ -1,4 +1,0 @@
-add_library(can_reader_api INTERFACE)
-target_include_directories(can_reader_api INTERFACE include)
-target_link_libraries(can_reader_api INTERFACE can_core)
-

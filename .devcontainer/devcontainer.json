@@ -8,14 +8,26 @@
     }
   },
   "containerEnv": {
-    "ENGRAM_DATA_DIR": "${containerWorkspaceFolder}/.engram" // Path where the Engram database is stored. Should be located inside the workspace folder so data persists across container rebuilds.
+    "PI_API_KEY": "${localEnv:PI_API_KEY}"
   },
   "mounts": [
-    // Load OpenCode credentials and settings from host.
-    "source=${localEnv:HOME}/.local/share/opencode,target=/home/sauroncode/.local/share/opencode,type=bind",
-    "source=${localEnv:HOME}/.config/opencode,target=/home/sauroncode/.config/opencode,type=bind"
+    {
+      "source": "${localEnv:HOME}/.pi-projects/${localWorkspaceFolderBasename}",
+      "target": "/home/devuser/.pi",
+      "type": "bind"
+    },
+    {
+      "source": "${localEnv:HOME}/.pi-projects/${localWorkspaceFolderBasename}/subagents",
+      "target": "${containerWorkspaceFolder}/.pi-subagents",
+      "type": "bind"
+    }
   ],
-  "postStartCommand": "sudo chown -R sauroncode:sauroncode /workspaces/${localWorkspaceFolderBasename} && chmod +x .devcontainer/docker_entrypoint.sh && .devcontainer/docker_entrypoint.sh",
+  "runArgs": [
+    "--env=DISPLAY",
+    "--volume=/tmp/.X11-unix:/tmp/.X11-unix",
+    "--env=XAUTHORITY=/tmp/.docker.xauth"
+  ],
+  "postStartCommand": "sudo chown -R devuser /workspaces/${localWorkspaceFolderBasename} /home/devuser/.pi && chmod +x .devcontainer/docker_entrypoint.sh && .devcontainer/docker_entrypoint.sh",
   "customizations": {
     "vscode": {
       "extensions": [

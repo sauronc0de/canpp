@@ -1,8 +1,0 @@
-# One path fragment per line. Any file or directory containing one of these
-# fragments will be skipped by the C++ style checker.
-_deps
-tools
-tests
-.cmake
-CMakeFiles
-ninja
