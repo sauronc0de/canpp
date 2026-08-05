@@ -230,20 +230,19 @@ endif()
 
 include(GNUInstallDirs)
 
-# Install the graphical application only when its target exists.
-if(TARGET ${PROJECT_NAME})
+# The trace CLI is the main application; the graph executable is an addon.
+if(TARGET Canpp)
   install(
-    TARGETS ${PROJECT_NAME}
+    TARGETS Canpp
     RUNTIME
       DESTINATION "${CMAKE_INSTALL_BINDIR}"
       COMPONENT canpp
   )
 endif()
 
-# Install the trace CLI independently from the graphical application.
-if(TARGET canpp_trace_cli)
+if(TARGET CanppGraph)
   install(
-    TARGETS canpp_trace_cli
+    TARGETS CanppGraph
     RUNTIME
       DESTINATION "${CMAKE_INSTALL_BINDIR}"
       COMPONENT canpp
@@ -341,7 +340,7 @@ if(WIN32 AND ENABLE_RENDER)
     )
   endif()
 
-  if(TARGET ${PROJECT_NAME})
+  if(TARGET Canpp AND TARGET CanppGraph)
     find_program(
       ISCC_EXE
       NAMES ISCC.exe
@@ -370,8 +369,13 @@ if(WIN32 AND ENABLE_RENDER)
 
         COMMAND
           ${CMAKE_COMMAND} -E copy
-          "$<TARGET_FILE:${PROJECT_NAME}>"
-          "${CANPP_WINDOWS_STAGE_DIR}/$<TARGET_FILE_NAME:${PROJECT_NAME}>"
+          "$<TARGET_FILE:Canpp>"
+          "${CANPP_WINDOWS_STAGE_DIR}/$<TARGET_FILE_NAME:Canpp>"
+
+        COMMAND
+          ${CMAKE_COMMAND} -E copy
+          "$<TARGET_FILE:CanppGraph>"
+          "${CANPP_WINDOWS_STAGE_DIR}/$<TARGET_FILE_NAME:CanppGraph>"
 
         COMMAND
           ${CMAKE_COMMAND} -E copy_directory
@@ -388,14 +392,22 @@ if(WIN32 AND ENABLE_RENDER)
           --login
           "${CANPP_COPY_DLL_SCRIPT}"
           "${CMAKE_SOURCE_DIR}"
-          "${CANPP_WINDOWS_STAGE_DIR}/$<TARGET_FILE_NAME:${PROJECT_NAME}>"
+          "${CANPP_WINDOWS_STAGE_DIR}/$<TARGET_FILE_NAME:Canpp>"
+
+        COMMAND
+          C:/msys64/usr/bin/bash.exe
+          --login
+          "${CANPP_COPY_DLL_SCRIPT}"
+          "${CMAKE_SOURCE_DIR}"
+          "${CANPP_WINDOWS_STAGE_DIR}/$<TARGET_FILE_NAME:CanppGraph>"
 
         COMMAND
           "${ISCC_EXE}"
           "${CMAKE_BINARY_DIR}/canpp.iss"
 
         DEPENDS
-          ${PROJECT_NAME}
+          Canpp
+          CanppGraph
 
         WORKING_DIRECTORY
           "${CMAKE_SOURCE_DIR}"
@@ -464,8 +476,8 @@ if(ENABLE_DEB_PACKAGE)
       --config "${CMAKE_BINARY_DIR}/CPackConfig.cmake"
 
     DEPENDS
-      $<$<TARGET_EXISTS:${PROJECT_NAME}>:${PROJECT_NAME}>
-      $<$<TARGET_EXISTS:canpp_trace_cli>:canpp_trace_cli>
+      $<$<TARGET_EXISTS:Canpp>:Canpp>
+      $<$<TARGET_EXISTS:CanppGraph>:CanppGraph>
 
     WORKING_DIRECTORY
       "${CMAKE_BINARY_DIR}"

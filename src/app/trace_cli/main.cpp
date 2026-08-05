@@ -459,7 +459,7 @@ void configure_completion() {
 
 int main(int argc, char** argv) {
     canpp::core::Session session;
-    const std::filesystem::path cli_path = argc > 0 && argv[0] != nullptr ? argv[0] : "canpp_trace_cli";
+    const std::filesystem::path cli_path = argc > 0 && argv[0] != nullptr ? argv[0] : "Canpp";
     std::cout << "Canpp communication trace CLI - type 'help'\n";
 #ifdef CANPP_TRACE_CLI_HAS_READLINE
     completion_session = &session;

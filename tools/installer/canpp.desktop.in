@@ -1,7 +1,7 @@
 [Desktop Entry]
-Name=Canpp
-Comment=Markdown note-taking application
-Exec=/usr/bin/canpp
+Name=Canpp Graph
+Comment=Canpp trace graph display addon
+Exec=CanppGraph
 Icon=/usr/share/pixmaps/canpp.ico
 Type=Application
 Categories=Office;TextEditor;

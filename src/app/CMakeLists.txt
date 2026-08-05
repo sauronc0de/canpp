@@ -5,9 +5,9 @@ endif()
 
 if(ENABLE_RENDER)
   add_subdirectory(trace_gui)
-  if(TARGET canpp_trace_cli AND TARGET Canpp)
-    target_compile_definitions(canpp_trace_cli PRIVATE
-      CANPP_GUI_EXECUTABLE_NAME="Canpp"
+  if(TARGET Canpp AND TARGET CanppGraph)
+    target_compile_definitions(Canpp PRIVATE
+      CANPP_GUI_EXECUTABLE_NAME="CanppGraph"
     )
   endif()
 endif()

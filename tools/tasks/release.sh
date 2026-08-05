@@ -149,20 +149,30 @@ if $BUILD_WINDOWS; then
   echo ""
   echo "🪟 Building Release_mingw preset..."
   cmake --preset Release_mingw -S "${WORKSPACE_DIR}"
-  cmake --build --preset Release_mingw
-
   DIST_WIN="${WORKSPACE_DIR}/dist/Canpp"
-  if command -v cygpath >/dev/null 2>&1; then
-    "${WORKSPACE_DIR}/tools/tasks/copy_mingw_dlls.sh" \
-      "${WORKSPACE_DIR}" "${DIST_WIN}/Canpp.exe"
+  if cmake --build --preset Release_mingw --target installer; then
+    echo "✅ Windows installer built"
   else
-    echo "⚠️  cygpath not found — skipping DLL copy (MSYS2 environment required)"
-  fi
+    echo "⚠️  installer target unavailable — staging a Windows archive instead"
+    cmake --build --preset Release_mingw
+    rm -rf "${DIST_WIN}"
+    mkdir -p "${DIST_WIN}"
+    cp "${WORKSPACE_DIR}/build/Release_mingw/bin/Canpp.exe" "${DIST_WIN}/"
+    cp "${WORKSPACE_DIR}/build/Release_mingw/bin/CanppGraph.exe" "${DIST_WIN}/"
+    cp -r "${WORKSPACE_DIR}/assets" "${DIST_WIN}/assets"
+    if [[ -f "${WORKSPACE_DIR}/THIRD_PARTY_LICENSES" ]]; then
+      cp "${WORKSPACE_DIR}/THIRD_PARTY_LICENSES" "${DIST_WIN}/"
+    fi
 
-  ISS_FILE="${WORKSPACE_DIR}/build/Release_mingw/canpp.iss"
-  if command -v iscc >/dev/null 2>&1; then
-    iscc "${ISS_FILE}"
-  else
+    if command -v cygpath >/dev/null 2>&1; then
+      "${WORKSPACE_DIR}/tools/tasks/copy_mingw_dlls.sh" \
+        "${WORKSPACE_DIR}" "${DIST_WIN}/Canpp.exe"
+      "${WORKSPACE_DIR}/tools/tasks/copy_mingw_dlls.sh" \
+        "${WORKSPACE_DIR}" "${DIST_WIN}/CanppGraph.exe"
+    else
+      echo "⚠️  cygpath not found — skipping DLL copy (MSYS2 environment required)"
+    fi
+
     echo "⚠️  iscc (InnoSetup) not found — packaging as zip instead"
     ZIP_FILE="${WORKSPACE_DIR}/dist/${VERSION}/${PROJECT_NAME}-windows-x64.zip"
     mkdir -p "${WORKSPACE_DIR}/dist/${VERSION}"

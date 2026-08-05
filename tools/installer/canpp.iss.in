@@ -1,7 +1,7 @@
 #define MyAppName "Canpp"
 #define MyAppVersion "@PROJECT_VERSION@"
 #define MyAppPublisher "sauroncode"
-#define MyAppExeName "Canpp.exe"
+#define MyAppExeName "CanppGraph.exe"
 
 [Setup]
 AppId={{9D9F6F60-4B3B-4C4D-9F4D-CANPP000001}
