@@ -48,3 +48,22 @@ set_target_properties(canpp_plot_tests PROPERTIES
   UNITY_BUILD OFF
 )
 add_test(NAME canpp_plot_tests COMMAND canpp_plot_tests)
+
+if(TARGET Canpp)
+  add_executable(canpp_trace_cli_tests trace_cli_tests.cpp)
+  target_compile_options(canpp_trace_cli_tests PRIVATE
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-UNDEBUG>
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/U;NDEBUG>
+  )
+  target_link_libraries(canpp_trace_cli_tests
+    PRIVATE
+      canpp::trace_core
+      canpp::project_options
+  )
+  target_compile_features(canpp_trace_cli_tests PRIVATE cxx_std_23)
+  set_target_properties(canpp_trace_cli_tests PROPERTIES
+    CXX_EXTENSIONS OFF
+    UNITY_BUILD OFF
+  )
+  add_test(NAME canpp_trace_cli_tests COMMAND canpp_trace_cli_tests $<TARGET_FILE:Canpp>)
+endif()

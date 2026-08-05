@@ -79,12 +79,20 @@ int main() {
     frame.message_name = "legacy-name";
     frame.data.assign(std::begin(payload), std::end(payload));
     assert(writer.append(canpp::protocol::can::encode(frame)));
+    canpp::trace::Record non_can;
+    non_can.timestamp_ns = 1'000'000'000;
+    non_can.protocol = canpp::trace::ProtocolId::uart;
+    non_can.payload = {0x01, 0x02};
+    assert(writer.append(non_can));
     assert(writer.finalize());
 
     canpp::core::Session legacy_session;
     assert(legacy_session.open(trace_path, error));
     assert(legacy_session.filter_can_name("legacy-name", true, error));
     assert(legacy_session.selection_size() == 1U);
+    std::ostringstream unavailable_variables;
+    legacy_session.print(unavailable_variables, canpp::core::PrintMode::variable);
+    assert(unavailable_variables.str() == "N/A (DBC values unavailable)\n");
 
     canpp::core::Session session;
     assert(session.open(trace_path, error));
@@ -104,6 +112,23 @@ int main() {
     session.print(printed);
     assert(printed.str().find("Speed=20.000000 km/h") != std::string::npos);
     assert(printed.str().find("Mode=On") != std::string::npos);
+
+    std::ostringstream messages;
+    session.print(messages, canpp::core::PrintMode::message);
+    assert(messages.str() == "legacy-name\n");
+    std::ostringstream ids;
+    session.print(ids, canpp::core::PrintMode::id);
+    assert(ids.str() == "100\n");
+    std::ostringstream timestamps;
+    session.print(timestamps, canpp::core::PrintMode::timestamp);
+    assert(timestamps.str() == "0.000000\n1.000000\n");
+    std::ostringstream variables;
+    session.print(variables, canpp::core::PrintMode::variable);
+    assert(variables.str().find("Speed=20.000000 km/h Mode=On") != std::string::npos);
+    assert(variables.str().find("N/A (not a CAN record)") != std::string::npos);
+    std::ostringstream limited;
+    session.print(limited, canpp::core::PrintMode::id, 1, 1);
+    assert(limited.str().empty());
 
     std::filesystem::remove(dbc_path);
     std::filesystem::remove(trace_path);

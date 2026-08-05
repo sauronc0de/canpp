@@ -15,6 +15,8 @@
 
 namespace canpp::core {
 
+enum class PrintMode { full, message, id, timestamp, variable };
+
 class Session {
 public:
     bool open(const std::filesystem::path& path, std::string& error);
@@ -39,6 +41,10 @@ public:
 
     bool save(const std::filesystem::path& output, std::string& error) const;
     void print(std::ostream& output, std::size_t limit = 20, std::size_t offset = 0) const;
+    void print(std::ostream& output,
+               PrintMode mode,
+               std::size_t limit = 20,
+               std::size_t offset = 0) const;
     void status(std::ostream& output) const;
 
     [[nodiscard]] bool has_trace() const;

@@ -188,6 +188,7 @@ void print_help() {
         << "  refs: signal.<Name>, message.name/id/extended, record.stream_id/protocol/direction, timestamp_ns, time\n"
         << "  ops: == != < <= > >= && || ! (precedence: !, comparison, &&, ||)\n"
         << "print [limit] [offset]\n"
+        << "print message|id|timestamp|variable [limit] [offset]\n"
         << "save <output.commtrace>\n"
         << "exit\n";
 }
@@ -234,12 +235,41 @@ bool execute_line(canpp::core::Session& session,
     } else if (args[0] == "print") {
         std::size_t limit = 20;
         std::size_t offset = 0;
-        if ((args.size() > 1U && !parse_number(args[1], limit, 10)) ||
-            (args.size() > 2U && !parse_number(args[2], offset, 10))) {
+        auto mode = canpp::core::PrintMode::full;
+        bool explicit_mode = false;
+        if (args.size() > 4U) {
+            std::cerr << "Invalid print arguments\n";
+            return true;
+        }
+        if (args.size() > 1U) {
+            if (args[1] == "message") {
+                mode = canpp::core::PrintMode::message;
+            } else if (args[1] == "id") {
+                mode = canpp::core::PrintMode::id;
+            } else if (args[1] == "timestamp") {
+                mode = canpp::core::PrintMode::timestamp;
+            } else if (args[1] == "variable" || args[1] == "variables") {
+                mode = canpp::core::PrintMode::variable;
+            } else if (!parse_number(args[1], limit, 10)) {
+                std::cerr << "Invalid print mode\n";
+                return true;
+            }
+            explicit_mode = mode != canpp::core::PrintMode::full;
+        }
+        const auto range_start = explicit_mode ? 2U : 1U;
+        if (args.size() > range_start && !parse_number(args[range_start], limit, 10)) {
             std::cerr << "Invalid print range\n";
             return true;
         }
-        session.print(std::cout, limit, offset);
+        if (args.size() > range_start + 1U && !parse_number(args[range_start + 1U], offset, 10)) {
+            std::cerr << "Invalid print range\n";
+            return true;
+        }
+        if (args.size() > range_start + 2U) {
+            std::cerr << "Invalid print range\n";
+            return true;
+        }
+        session.print(std::cout, mode, limit, offset);
         return true;
     } else if (args[0] == "filter" && args.size() >= 2U) {
         if (args[1] == "range") {
@@ -342,6 +372,9 @@ std::vector<std::string> completion_candidates(const std::string& line,
     }
     if (completed.size() == 1U && completed[0] == "import") {
         return {"asc"};
+    }
+    if (completed.size() == 1U && completed[0] == "print") {
+        return {"message", "id", "timestamp", "variable", "variables"};
     }
     if (completed.size() == 1U && completed[0] == "filter") {
         // Readline's `start` points at the current token, so use `text`

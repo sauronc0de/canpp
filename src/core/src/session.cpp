@@ -181,51 +181,118 @@ bool Session::save(const std::filesystem::path& output, std::string& error) cons
 }
 
 void Session::print(std::ostream& output, std::size_t limit, std::size_t offset) const {
-    const auto end = std::min(selection_.size(), offset + limit);
+    print(output, PrintMode::full, limit, offset);
+}
+
+void Session::print(std::ostream& output,
+                    PrintMode mode,
+                    std::size_t limit,
+                    std::size_t offset) const {
+    const auto end = offset < selection_.size()
+                         ? offset + std::min(limit, selection_.size() - offset)
+                         : offset;
     for (std::size_t row = offset; row < end; ++row) {
         const auto record = reader_.read(selection_[row]);
         if (!record) {
             continue;
         }
-        if (const auto frame = protocol::can::decode(*record)) {
+        const auto frame = protocol::can::decode(*record);
+        if (mode == PrintMode::timestamp) {
             output << std::fixed << std::setprecision(6)
-                   << static_cast<double>(frame->timestamp_ns) / 1'000'000'000.0 << " CAN"
-                   << (frame->fd ? "FD " : " ") << frame->stream_id << ' '
-                   << (frame->direction == trace::Direction::rx ? "Rx " : "Tx ")
-                   << std::hex << std::uppercase << frame->can_id
-                   << (frame->extended ? "x " : " ") << std::dec
-                   << frame->message_name << " [" << frame->data.size() << ']';
-            for (const auto byte : frame->data) {
-                output << ' ' << std::hex << std::setw(2) << std::setfill('0')
-                       << static_cast<unsigned>(byte);
-            }
-            if (!dbc_.empty()) {
-                const auto values = dbc_.decode(frame->can_id, frame->extended, frame->data);
-                for (const auto& value : values) {
-                    output << ' ' << value.name << '=';
-                    if (value.description) {
-                        output << *value.description << " (" << std::fixed << std::setprecision(6)
-                               << value.value;
-                        if (!value.unit.empty()) {
-                            output << ' ' << value.unit;
-                        }
-                        output << ')';
-                    } else {
-                        output << std::fixed << std::setprecision(6) << value.value;
-                        if (!value.unit.empty()) {
-                            output << ' ' << value.unit;
+                   << static_cast<double>(record->timestamp_ns) / 1'000'000'000.0 << '\n';
+            continue;
+        }
+        if (mode == PrintMode::full) {
+            if (frame) {
+                output << std::fixed << std::setprecision(6)
+                       << static_cast<double>(frame->timestamp_ns) / 1'000'000'000.0 << " CAN"
+                       << (frame->fd ? "FD " : " ") << frame->stream_id << ' '
+                       << (frame->direction == trace::Direction::rx ? "Rx " : "Tx ")
+                       << std::hex << std::uppercase << frame->can_id
+                       << (frame->extended ? "x " : " ") << std::dec
+                       << frame->message_name << " [" << frame->data.size() << ']';
+                for (const auto byte : frame->data) {
+                    output << ' ' << std::hex << std::setw(2) << std::setfill('0')
+                           << static_cast<unsigned>(byte);
+                }
+                if (!dbc_.empty()) {
+                    const auto values = dbc_.decode(frame->can_id, frame->extended, frame->data);
+                    for (const auto& value : values) {
+                        output << ' ' << value.name << '=';
+                        if (value.description) {
+                            output << *value.description << " (" << std::fixed << std::setprecision(6)
+                                   << value.value;
+                            if (!value.unit.empty()) {
+                                output << ' ' << value.unit;
+                            }
+                            output << ')';
+                        } else {
+                            output << std::fixed << std::setprecision(6) << value.value;
+                            if (!value.unit.empty()) {
+                                output << ' ' << value.unit;
+                            }
                         }
                     }
                 }
+                output << std::dec << std::setfill(' ') << '\n';
+            } else {
+                output << std::fixed << std::setprecision(6)
+                       << static_cast<double>(record->timestamp_ns) / 1'000'000'000.0
+                       << " protocol=" << static_cast<unsigned>(record->protocol)
+                       << " stream=" << record->stream_id
+                       << " bytes=" << record->payload.size() << '\n';
             }
-            output << std::dec << std::setfill(' ') << '\n';
-        } else {
-            output << std::fixed << std::setprecision(6)
-                   << static_cast<double>(record->timestamp_ns) / 1'000'000'000.0
-                   << " protocol=" << static_cast<unsigned>(record->protocol)
-                   << " stream=" << record->stream_id
-                   << " bytes=" << record->payload.size() << '\n';
+            continue;
         }
+        if (!frame) {
+            if (mode == PrintMode::variable) {
+                output << (record->protocol == trace::ProtocolId::can ? "N/A (CAN values unavailable)\n"
+                                                                       : "N/A (not a CAN record)\n");
+            }
+            continue;
+        }
+        if (mode == PrintMode::message) {
+            if (!frame->message_name.empty()) {
+                output << frame->message_name << '\n';
+            } else if (const auto* message = dbc_.find_message(frame->can_id, frame->extended)) {
+                output << message->name << '\n';
+            } else {
+                output << "N/A (message name unavailable)\n";
+            }
+            continue;
+        }
+        if (mode == PrintMode::id) {
+            output << std::hex << std::uppercase << frame->can_id << std::dec << '\n';
+            continue;
+        }
+        const auto values = dbc_.empty()
+                                ? std::vector<protocol::can::DbcSignalValue>{}
+                                : dbc_.decode(frame->can_id, frame->extended, frame->data);
+        if (values.empty()) {
+            output << "N/A (DBC values unavailable)\n";
+            continue;
+        }
+        for (std::size_t value_index = 0; value_index < values.size(); ++value_index) {
+            if (value_index != 0U) {
+                output << ' ';
+            }
+            const auto& value = values[value_index];
+            output << value.name << '=';
+            if (value.description) {
+                output << *value.description << " (" << std::fixed << std::setprecision(6)
+                       << value.value;
+                if (!value.unit.empty()) {
+                    output << ' ' << value.unit;
+                }
+                output << ')';
+            } else {
+                output << std::fixed << std::setprecision(6) << value.value;
+                if (!value.unit.empty()) {
+                    output << ' ' << value.unit;
+                }
+            }
+        }
+        output << '\n';
     }
 }
 
