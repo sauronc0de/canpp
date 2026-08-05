@@ -294,6 +294,23 @@ target_compile_features(vterm PRIVATE c_std_99)
 # errors. Disable unity for this target only.
 set_target_properties(vterm PROPERTIES UNITY_BUILD OFF)
 
+# ── ImPlot (rendering only) ───────────────────────────────────────────────
+if(ENABLE_RENDER)
+  FetchContent_Declare(
+    implot
+    GIT_REPOSITORY https://github.com/epezent/implot.git
+    GIT_TAG        v0.16
+  )
+  FetchContent_MakeAvailable(implot)
+  add_library(canpp_implot STATIC
+    ${implot_SOURCE_DIR}/implot.cpp
+    ${implot_SOURCE_DIR}/implot_items.cpp
+  )
+  target_include_directories(canpp_implot PUBLIC ${implot_SOURCE_DIR})
+  target_link_libraries(canpp_implot PUBLIC imgui)
+  target_compile_features(canpp_implot PRIVATE cxx_std_23)
+endif()
+
 # ─────────────────────────────────────────────────────────────────────────
 #  Third-party warning suppression
 # ─────────────────────────────────────────────────────────────────────────
@@ -306,6 +323,7 @@ set_target_properties(vterm PROPERTIES UNITY_BUILD OFF)
 set(_CANPP_THIRD_PARTY_TARGETS
   freetype
   imgui
+  canpp_implot
   boost_headers
   md4c
   tree_sitter_runtime

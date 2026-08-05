@@ -45,6 +45,22 @@ struct DbcSignalValue {
     std::optional<std::string> description;
 };
 
+struct SignalKey {
+    std::uint32_t can_id{};
+    bool extended{};
+    std::string message_name;
+    std::string signal_name;
+
+    friend bool operator==(const SignalKey&, const SignalKey&) = default;
+};
+
+struct SignalDescriptor {
+    SignalKey key;
+    std::string unit;
+    double minimum{};
+    double maximum{};
+};
+
 class DbcDatabase {
 public:
     bool load(const std::filesystem::path& path, std::string& error);
@@ -63,6 +79,7 @@ public:
     [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
     [[nodiscard]] std::vector<std::string> message_names() const;
     [[nodiscard]] std::vector<std::string> signal_names() const;
+    [[nodiscard]] std::vector<SignalDescriptor> signal_catalog() const;
     [[nodiscard]] bool empty() const noexcept { return messages_.empty(); }
 
 private:

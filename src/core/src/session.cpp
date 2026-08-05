@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <numeric>
 #include <ostream>
+#include <sstream>
 #include <utility>
 
 namespace canpp::core {
@@ -242,9 +243,99 @@ void Session::status(std::ostream& output) const {
 }
 
 bool Session::has_trace() const { return reader_.is_open(); }
+const std::filesystem::path& Session::trace_path() const noexcept { return reader_.path(); }
+const std::filesystem::path& Session::dbc_path() const noexcept { return dbc_.path(); }
 std::size_t Session::selection_size() const { return selection_.size(); }
 
 std::vector<std::string> Session::dbc_message_names() const { return dbc_.message_names(); }
 std::vector<std::string> Session::dbc_signal_names() const { return dbc_.signal_names(); }
+
+std::vector<protocol::can::SignalDescriptor> Session::plot_variables() const {
+    return dbc_.signal_catalog();
+}
+
+bool Session::extract_plot_data(const PlotRequest& request,
+                                std::vector<PlotSeries>& output,
+                                std::string& error) const {
+    if (!has_trace()) {
+        error = "No communication trace is open";
+        return false;
+    }
+    if (dbc_.empty()) {
+        error = "No DBC database is loaded";
+        return false;
+    }
+    if (request.variables.empty()) {
+        error = "At least one graph variable is required";
+        return false;
+    }
+
+    std::vector<PlotSeries> result;
+    result.reserve(request.variables.size());
+    for (const auto& variable : request.variables) {
+        const auto* message = dbc_.find_message(variable.can_id, variable.extended);
+        if (message == nullptr || message->name != variable.message_name ||
+            dbc_.find_signal(variable.can_id, variable.extended, variable.signal_name) == nullptr) {
+            error = "Unknown graph variable: " + variable.message_name + "." + variable.signal_name +
+                    " (CAN ID 0x" + [&variable] {
+                        std::ostringstream id;
+                        id << std::hex << std::uppercase << variable.can_id;
+                        return id.str();
+                    }() + (variable.extended ? ", extended)" : ", standard)");
+            return false;
+        }
+        const auto* signal = dbc_.find_signal(variable.can_id, variable.extended, variable.signal_name);
+        PlotSeries series;
+        series.variable = variable;
+        series.unit = signal->unit;
+        result.push_back(std::move(series));
+    }
+
+    std::vector<std::uint64_t> source;
+    if (request.source == PlotSource::full_trace) {
+        source.resize(static_cast<std::size_t>(reader_.size()));
+        std::iota(source.begin(), source.end(), std::uint64_t{0});
+    } else {
+        source = selection_;
+    }
+    for (auto& series : result) {
+        series.samples.reserve(source.size());
+    }
+
+    for (const auto source_index : source) {
+        const auto record = reader_.read(source_index);
+        if (!record) {
+            error = "Cannot read record " + std::to_string(source_index);
+            return false;
+        }
+        std::vector<protocol::can::DbcSignalValue> decoded;
+        const auto frame = protocol::can::decode(*record);
+        if (record->protocol == trace::ProtocolId::can && !frame) {
+            error = "Cannot decode CAN record " + std::to_string(source_index);
+            return false;
+        }
+        if (frame) {
+            decoded = dbc_.decode(frame->can_id, frame->extended, frame->data);
+        }
+        for (auto& series : result) {
+            std::optional<double> value;
+            if (frame) {
+                const auto& key = series.variable;
+                if (frame->can_id == key.can_id && frame->extended == key.extended) {
+                    const auto decoded_value = std::find_if(
+                        decoded.begin(), decoded.end(), [&key](const protocol::can::DbcSignalValue& candidate) {
+                            return candidate.name == key.signal_name;
+                        });
+                    if (decoded_value != decoded.end()) {
+                        value = decoded_value->value;
+                    }
+                }
+            }
+            series.samples.push_back(PlotSample{record->timestamp_ns, value});
+        }
+    }
+    output = std::move(result);
+    return true;
+}
 
 } // namespace canpp::core

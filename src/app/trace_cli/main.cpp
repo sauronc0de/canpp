@@ -5,6 +5,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#ifdef _WIN32
+#include <process.h>
+#endif
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -96,11 +99,83 @@ bool remove_original_suffix(std::string& expression) {
     return true;
 }
 
+#ifdef CANPP_GUI_EXECUTABLE_NAME
+std::filesystem::path gui_path(const std::filesystem::path& cli_path) {
+    const auto directory = std::filesystem::absolute(cli_path).parent_path();
+    auto executable = directory / CANPP_GUI_EXECUTABLE_NAME;
+#ifdef _WIN32
+    if (!executable.has_extension()) {
+        executable += ".exe";
+    }
+#endif
+    return executable;
+}
+
+#ifndef _WIN32
+std::string shell_quote(const std::filesystem::path& path) {
+    std::string quoted{"'"};
+    for (const char character : path.string()) {
+        if (character == '\'') {
+            quoted += "'\\''";
+        } else {
+            quoted += character;
+        }
+    }
+    quoted += '\'';
+    return quoted;
+}
+#endif
+#endif
+
+bool launch_gui(const canpp::core::Session& session,
+                const std::filesystem::path& cli_path,
+                std::string& error) {
+    if (!session.has_trace()) {
+        error = "No communication trace is open";
+        return false;
+    }
+    if (session.dbc_path().empty()) {
+        error = "No DBC database is loaded";
+        return false;
+    }
+#ifdef CANPP_GUI_EXECUTABLE_NAME
+    const auto executable = gui_path(cli_path);
+    std::error_code filesystem_error;
+    if (!std::filesystem::is_regular_file(executable, filesystem_error)) {
+        error = "GUI executable not found: " + executable.string();
+        return false;
+    }
+#ifdef _WIN32
+    const std::string executable_string = executable.string();
+    const std::string trace_string = session.trace_path().string();
+    const std::string dbc_string = session.dbc_path().string();
+    const char* arguments[] = {executable_string.c_str(), trace_string.c_str(), dbc_string.c_str(), nullptr};
+    if (_spawnv(_P_NOWAIT, executable_string.c_str(), arguments) == -1) {
+        error = "Unable to launch GUI executable: " + executable.string();
+        return false;
+    }
+#else
+    const auto command = shell_quote(executable) + " " + shell_quote(session.trace_path()) + " " +
+                         shell_quote(session.dbc_path());
+    if (std::system(command.c_str()) != 0) {
+        error = "Unable to launch GUI executable: " + executable.string();
+        return false;
+    }
+#endif
+    return true;
+#else
+    (void)cli_path;
+    error = "GUI is unavailable; rebuild with ENABLE_RENDER=ON";
+    return false;
+#endif
+}
+
 void print_help() {
     std::cout
         << "import asc <input.asc> <output.commtrace>\n"
         << "open <file.commtrace>\n"
         << "load dbc <file.dbc>\n"
+        << "gui\n"
         << "status | reset\n"
         << "filter protocol can [original]\n"
         << "filter direction rx|tx [original]\n"
@@ -117,7 +192,9 @@ void print_help() {
         << "exit\n";
 }
 
-bool execute_line(canpp::core::Session& session, const std::string& line) {
+bool execute_line(canpp::core::Session& session,
+                  const std::string& line,
+                  const std::filesystem::path& cli_path) {
     const auto args = split(line);
     if (args.empty()) {
         return true;
@@ -140,7 +217,9 @@ bool execute_line(canpp::core::Session& session, const std::string& line) {
         session.status(std::cout);
         return true;
     }
-    if (args[0] == "open" && args.size() == 2U) {
+    if (args[0] == "gui" && args.size() == 1U) {
+        success = launch_gui(session, cli_path, error);
+    } else if (args[0] == "open" && args.size() == 2U) {
         success = session.open(args[1], error);
     } else if (args[0] == "load" && args.size() == 3U && args[1] == "dbc") {
         success = session.load_dbc(args[2], error);
@@ -228,7 +307,7 @@ bool execute_line(canpp::core::Session& session, const std::string& line) {
 #ifdef CANPP_TRACE_CLI_HAS_READLINE
 
 const std::vector<std::string> top_level_commands{
-    "import", "open", "load", "status", "reset", "filter", "print", "save", "exit", "quit", "help"};
+    "import", "open", "load", "gui", "status", "reset", "filter", "print", "save", "exit", "quit", "help"};
 
 canpp::core::Session* completion_session = nullptr;
 std::vector<std::string> completion_values;
@@ -378,8 +457,9 @@ void configure_completion() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     canpp::core::Session session;
+    const std::filesystem::path cli_path = argc > 0 && argv[0] != nullptr ? argv[0] : "canpp_trace_cli";
     std::cout << "Canpp communication trace CLI - type 'help'\n";
 #ifdef CANPP_TRACE_CLI_HAS_READLINE
     completion_session = &session;
@@ -397,14 +477,14 @@ int main() {
         if (!line.empty()) {
             add_history(line.c_str());
         }
-        if (!execute_line(session, line)) {
+        if (!execute_line(session, line, cli_path)) {
             break;
         }
     }
     save_history();
 #else
     for (std::string line; std::cout << "canpp> " && std::getline(std::cin, line);) {
-        if (!execute_line(session, line)) {
+        if (!execute_line(session, line, cli_path)) {
             break;
         }
     }

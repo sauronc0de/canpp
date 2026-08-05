@@ -2,6 +2,7 @@
 
 #include "canpp/protocol/can/asc_importer.hpp"
 #include "canpp/core/query.hpp"
+#include "canpp/core/plot_data.hpp"
 #include "canpp/protocol/can/dbc.hpp"
 #include "canpp/trace/binary_trace.hpp"
 
@@ -41,9 +42,15 @@ public:
     void status(std::ostream& output) const;
 
     [[nodiscard]] bool has_trace() const;
+    [[nodiscard]] const std::filesystem::path& trace_path() const noexcept;
+    [[nodiscard]] const std::filesystem::path& dbc_path() const noexcept;
     [[nodiscard]] std::size_t selection_size() const;
     [[nodiscard]] std::vector<std::string> dbc_message_names() const;
     [[nodiscard]] std::vector<std::string> dbc_signal_names() const;
+    [[nodiscard]] std::vector<protocol::can::SignalDescriptor> plot_variables() const;
+    bool extract_plot_data(const PlotRequest& request,
+                           std::vector<PlotSeries>& output,
+                           std::string& error) const;
 
 private:
     template <typename Predicate>

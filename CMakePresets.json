@@ -49,7 +49,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "ENABLE_LOG": "ON",
-        "ENABLE_RENDER": "OFF",
+        "ENABLE_RENDER": "ON",
         "CMAKE_C_COMPILER_LAUNCHER": "ccache",
         "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
         "CMAKE_UNITY_BUILD": "ON",

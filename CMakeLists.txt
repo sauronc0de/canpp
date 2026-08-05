@@ -206,7 +206,9 @@ endif()
 # targets. Protocol implementations depend on the trace library. Core depends
 # on libraries. Applications depend on core.
 
-add_subdirectory(externals)
+if(ENABLE_RENDER)
+  add_subdirectory(externals)
+endif()
 add_subdirectory(src/libraries)
 add_subdirectory(src/core)
 

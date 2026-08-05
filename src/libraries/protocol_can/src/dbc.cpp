@@ -405,4 +405,22 @@ std::vector<std::string> DbcDatabase::signal_names() const {
     return names;
 }
 
+std::vector<SignalDescriptor> DbcDatabase::signal_catalog() const {
+    std::vector<SignalDescriptor> descriptors;
+    for (const auto& message : messages_) {
+        for (const auto& signal : message.signals) {
+            SignalDescriptor descriptor;
+            descriptor.key.can_id = message.id;
+            descriptor.key.extended = message.extended;
+            descriptor.key.message_name = message.name;
+            descriptor.key.signal_name = signal.name;
+            descriptor.unit = signal.unit;
+            descriptor.minimum = signal.minimum;
+            descriptor.maximum = signal.maximum;
+            descriptors.push_back(std::move(descriptor));
+        }
+    }
+    return descriptors;
+}
+
 } // namespace canpp::protocol::can

@@ -23,3 +23,16 @@ set_target_properties(canpp_query_tests PROPERTIES
   UNITY_BUILD OFF
 )
 add_test(NAME canpp_query_tests COMMAND canpp_query_tests)
+
+add_executable(canpp_plot_tests plot_tests.cpp)
+target_link_libraries(canpp_plot_tests
+  PRIVATE
+    canpp::trace_core
+    canpp::project_options
+)
+target_compile_features(canpp_plot_tests PRIVATE cxx_std_23)
+set_target_properties(canpp_plot_tests PROPERTIES
+  CXX_EXTENSIONS OFF
+  UNITY_BUILD OFF
+)
+add_test(NAME canpp_plot_tests COMMAND canpp_plot_tests)
