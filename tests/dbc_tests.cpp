@@ -115,20 +115,64 @@ int main() {
 
     std::ostringstream messages;
     session.print(messages, canpp::core::PrintMode::message);
-    assert(messages.str() == "legacy-name\n");
+    assert(messages.str() == "Index Timestamp Message\n0 0.000000 Example\n");
     std::ostringstream ids;
     session.print(ids, canpp::core::PrintMode::id);
-    assert(ids.str() == "100\n");
+    assert(ids.str() == "Index Timestamp ID\n0 0.000000 100\n");
     std::ostringstream timestamps;
     session.print(timestamps, canpp::core::PrintMode::timestamp);
-    assert(timestamps.str() == "0.000000\n1.000000\n");
+    assert(timestamps.str() == "Index Timestamp\n0 0.000000\n1 1.000000\n");
     std::ostringstream variables;
     session.print(variables, canpp::core::PrintMode::variable);
     assert(variables.str().find("Speed=20.000000 km/h Mode=On") != std::string::npos);
     assert(variables.str().find("N/A (not a CAN record)") != std::string::npos);
+
+    std::ostringstream selected_variable;
+    error.clear();
+    assert(session.print_variable(selected_variable, "Speed", 20, 0, error));
+    assert(selected_variable.str() == "Index Timestamp Value\n0 0.000000 20.000000\n");
+
+    std::ostringstream indexed;
+    error.clear();
+    assert(session.print_index(indexed, 0, 0, error));
+    assert(indexed.str().find("legacy-name") != std::string::npos);
+    assert(indexed.str().find("protocol=") == std::string::npos);
+    std::ostringstream indexed_range;
+    error.clear();
+    assert(session.print_index(indexed_range, 0, 1, error));
+    const auto indexed_range_text = indexed_range.str();
+    assert(std::count(indexed_range_text.begin(), indexed_range_text.end(), '\n') == 2);
+    error.clear();
+    assert(!session.print_index(indexed_range, 0, 2, error));
+    assert(error.find("Index out of bounds") != std::string::npos);
+    const auto selection_before_print_filter = session.selection_size();
+    std::ostringstream filtered_print;
+    error.clear();
+    assert(session.print_filter(filtered_print, "message.name == \"Example\"", error));
+    assert(filtered_print.str().find("legacy-name") != std::string::npos);
+    assert(session.selection_size() == selection_before_print_filter);
+
+    session.clear_history();
+    session.record_history("reset");
+    session.record_history("filter message.name == \"Example\"");
+    std::ostringstream history;
+    session.print_history(history);
+    assert(history.str() == "1 reset\n2 filter message.name == \"Example\"\n");
+    std::ostringstream unavailable_signal;
+    error.clear();
+    assert(session.print_variable(unavailable_signal, "Wide", 20, 0, error));
+    assert(unavailable_signal.str() == "Index Timestamp Value\n");
+    std::ostringstream unknown_signal;
+    error.clear();
+    assert(!session.print_variable(unknown_signal, "Unknown", 20, 0, error));
+    assert(error == "Unknown DBC signal: Unknown");
+    error.clear();
+    assert(!legacy_session.print_variable(unknown_signal, "Speed", 20, 0, error));
+    assert(error == "No DBC database is loaded");
+
     std::ostringstream limited;
     session.print(limited, canpp::core::PrintMode::id, 1, 1);
-    assert(limited.str().empty());
+    assert(limited.str() == "Index Timestamp ID\n");
 
     std::filesystem::remove(dbc_path);
     std::filesystem::remove(trace_path);

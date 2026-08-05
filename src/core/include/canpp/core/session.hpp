@@ -45,6 +45,21 @@ public:
                PrintMode mode,
                std::size_t limit = 20,
                std::size_t offset = 0) const;
+    bool print_variable(std::ostream& output,
+                        const std::string& signal_name,
+                        std::size_t limit,
+                        std::size_t offset,
+                        std::string& error) const;
+    bool print_index(std::ostream& output,
+                     std::size_t first,
+                     std::size_t last,
+                     std::string& error) const;
+    bool print_filter(std::ostream& output,
+                      const std::string& expression,
+                      std::string& error) const;
+    void print_history(std::ostream& output) const;
+    void record_history(std::string command);
+    void clear_history();
     void status(std::ostream& output) const;
 
     [[nodiscard]] bool has_trace() const;
@@ -61,10 +76,12 @@ public:
 private:
     template <typename Predicate>
     bool apply_filter(Predicate&& predicate, bool original, std::string& error);
+    void print_full_record(std::ostream& output, const trace::Record& record) const;
 
     trace::BinaryTraceReader reader_;
     std::vector<std::uint64_t> selection_;
     protocol::can::DbcDatabase dbc_;
+    std::vector<std::string> history_;
 };
 
 } // namespace canpp::core

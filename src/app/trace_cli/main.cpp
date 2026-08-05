@@ -177,6 +177,7 @@ void print_help() {
         << "load dbc <file.dbc>\n"
         << "gui\n"
         << "status | reset\n"
+        << "history\n"
         << "filter protocol can [original]\n"
         << "filter direction rx|tx [original]\n"
         << "filter payload <offset> <hex-byte> [original]\n"
@@ -188,7 +189,10 @@ void print_help() {
         << "  refs: signal.<Name>, message.name/id/extended, record.stream_id/protocol/direction, timestamp_ns, time\n"
         << "  ops: == != < <= > >= && || ! (precedence: !, comparison, &&, ||)\n"
         << "print [limit] [offset]\n"
-        << "print message|id|timestamp|variable [limit] [offset]\n"
+        << "print message|id|timestamp [limit] [offset]\n"
+        << "print variable[s] <SignalName> [limit] [offset]\n"
+        << "print index <index> [<last-index>]\n"
+        << "print filter <expression> (current selection; non-mutating)\n"
         << "save <output.commtrace>\n"
         << "exit\n";
 }
@@ -213,8 +217,13 @@ bool execute_line(canpp::core::Session& session,
         session.status(std::cout);
         return true;
     }
+    if (args[0] == "history") {
+        session.print_history(std::cout);
+        return true;
+    }
     if (args[0] == "reset") {
         session.reset();
+        session.record_history(line);
         session.status(std::cout);
         return true;
     }
@@ -233,14 +242,43 @@ bool execute_line(canpp::core::Session& session,
     } else if (args[0] == "save" && args.size() == 2U) {
         success = session.save(args[1], error);
     } else if (args[0] == "print") {
+        if (args.size() >= 2U && args[1] == "index") {
+            if (args.size() != 3U && args.size() != 4U) {
+                std::cerr << "Usage: print index <index> [<last-index>]\n";
+                return true;
+            }
+            std::size_t first{};
+            std::size_t last{};
+            if (!parse_number(args[2], first, 10) ||
+                (args.size() == 4U && !parse_number(args[3], last, 10))) {
+                std::cerr << "Invalid index: expected a non-negative integer\n";
+                return true;
+            }
+            if (args.size() == 3U) {
+                last = first;
+            }
+            if (!session.print_index(std::cout, first, last, error)) {
+                std::cerr << "Error: " << error << '\n';
+            }
+            return true;
+        }
+        if (args.size() >= 2U && args[1] == "filter") {
+            const auto expression = raw_after_words(line, 2U);
+            if (expression.empty()) {
+                std::cerr << "Usage: print filter <expression>\n";
+                return true;
+            }
+            if (!session.print_filter(std::cout, expression, error)) {
+                std::cerr << "Error: " << error << '\n';
+            }
+            return true;
+        }
         std::size_t limit = 20;
         std::size_t offset = 0;
         auto mode = canpp::core::PrintMode::full;
         bool explicit_mode = false;
-        if (args.size() > 4U) {
-            std::cerr << "Invalid print arguments\n";
-            return true;
-        }
+        std::string variable_name;
+        bool variable_signal = false;
         if (args.size() > 1U) {
             if (args[1] == "message") {
                 mode = canpp::core::PrintMode::message;
@@ -250,13 +288,24 @@ bool execute_line(canpp::core::Session& session,
                 mode = canpp::core::PrintMode::timestamp;
             } else if (args[1] == "variable" || args[1] == "variables") {
                 mode = canpp::core::PrintMode::variable;
+                if (args.size() < 3U || parse_number(args[2], limit, 10)) {
+                    std::cerr << "Usage: print variable <SignalName> [limit] [offset]\n";
+                    return true;
+                }
+                variable_signal = true;
+                variable_name = args[2];
             } else if (!parse_number(args[1], limit, 10)) {
                 std::cerr << "Invalid print mode\n";
                 return true;
             }
             explicit_mode = mode != canpp::core::PrintMode::full;
         }
-        const auto range_start = explicit_mode ? 2U : 1U;
+        const auto range_start = variable_signal ? 3U : explicit_mode ? 2U : 1U;
+        if (args.size() > range_start + 2U ||
+            (mode != canpp::core::PrintMode::variable && args.size() > 4U)) {
+            std::cerr << "Invalid print arguments\n";
+            return true;
+        }
         if (args.size() > range_start && !parse_number(args[range_start], limit, 10)) {
             std::cerr << "Invalid print range\n";
             return true;
@@ -265,11 +314,13 @@ bool execute_line(canpp::core::Session& session,
             std::cerr << "Invalid print range\n";
             return true;
         }
-        if (args.size() > range_start + 2U) {
-            std::cerr << "Invalid print range\n";
-            return true;
+        if (variable_signal) {
+            if (!session.print_variable(std::cout, variable_name, limit, offset, error)) {
+                std::cerr << "Error: " << error << '\n';
+            }
+        } else {
+            session.print(std::cout, mode, limit, offset);
         }
-        session.print(std::cout, mode, limit, offset);
         return true;
     } else if (args[0] == "filter" && args.size() >= 2U) {
         if (args[1] == "range") {
@@ -329,6 +380,9 @@ bool execute_line(canpp::core::Session& session,
     if (!success) {
         std::cerr << "Error: " << (error.empty() ? "invalid command" : error) << '\n';
     } else {
+        if (args[0] == "filter" || args[0] == "open" || args[0] == "load" || args[0] == "import") {
+            session.record_history(line);
+        }
         session.status(std::cout);
     }
     return true;
@@ -337,7 +391,7 @@ bool execute_line(canpp::core::Session& session,
 #ifdef CANPP_TRACE_CLI_HAS_READLINE
 
 const std::vector<std::string> top_level_commands{
-    "import", "open", "load", "gui", "status", "reset", "filter", "print", "save", "exit", "quit", "help"};
+    "import", "open", "load", "gui", "status", "reset", "history", "filter", "print", "save", "exit", "quit", "help"};
 
 canpp::core::Session* completion_session = nullptr;
 std::vector<std::string> completion_values;
@@ -374,7 +428,7 @@ std::vector<std::string> completion_candidates(const std::string& line,
         return {"asc"};
     }
     if (completed.size() == 1U && completed[0] == "print") {
-        return {"message", "id", "timestamp", "variable", "variables"};
+        return {"message", "id", "timestamp", "variable", "variables", "index", "filter"};
     }
     if (completed.size() == 1U && completed[0] == "filter") {
         // Readline's `start` points at the current token, so use `text`
@@ -384,6 +438,13 @@ std::vector<std::string> completion_candidates(const std::string& line,
             return signal_completion_candidates();
         }
         return {"protocol", "direction", "payload", "can", "range", "signal.", "message.", "record.", "timestamp_ns", "time"};
+    }
+    if (completed.size() == 2U && completed[0] == "print" && completed[1] == "filter") {
+        return {"signal.", "message.", "record.", "timestamp_ns", "time"};
+    }
+    if (completed.size() == 2U && completed[0] == "print" &&
+        (completed[1] == "variable" || completed[1] == "variables") && completion_session != nullptr) {
+        return completion_session->dbc_signal_names();
     }
     if (completed.size() == 2U && completed[0] == "filter") {
         if (completed[1] == "range") {

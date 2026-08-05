@@ -15,6 +15,7 @@ bool Session::open(const std::filesystem::path& path, std::string& error) {
     if (!reader_.open(path, error)) {
         return false;
     }
+    clear_history();
     reset();
     return true;
 }
@@ -191,59 +192,28 @@ void Session::print(std::ostream& output,
     const auto end = offset < selection_.size()
                          ? offset + std::min(limit, selection_.size() - offset)
                          : offset;
+    if (mode == PrintMode::message) {
+        output << "Index Timestamp Message\n";
+    } else if (mode == PrintMode::id) {
+        output << "Index Timestamp ID\n";
+    } else if (mode == PrintMode::timestamp) {
+        output << "Index Timestamp\n";
+    }
     for (std::size_t row = offset; row < end; ++row) {
         const auto record = reader_.read(selection_[row]);
         if (!record) {
             continue;
         }
-        const auto frame = protocol::can::decode(*record);
         if (mode == PrintMode::timestamp) {
-            output << std::fixed << std::setprecision(6)
+            output << row << ' ' << std::fixed << std::setprecision(6)
                    << static_cast<double>(record->timestamp_ns) / 1'000'000'000.0 << '\n';
             continue;
         }
         if (mode == PrintMode::full) {
-            if (frame) {
-                output << std::fixed << std::setprecision(6)
-                       << static_cast<double>(frame->timestamp_ns) / 1'000'000'000.0 << " CAN"
-                       << (frame->fd ? "FD " : " ") << frame->stream_id << ' '
-                       << (frame->direction == trace::Direction::rx ? "Rx " : "Tx ")
-                       << std::hex << std::uppercase << frame->can_id
-                       << (frame->extended ? "x " : " ") << std::dec
-                       << frame->message_name << " [" << frame->data.size() << ']';
-                for (const auto byte : frame->data) {
-                    output << ' ' << std::hex << std::setw(2) << std::setfill('0')
-                           << static_cast<unsigned>(byte);
-                }
-                if (!dbc_.empty()) {
-                    const auto values = dbc_.decode(frame->can_id, frame->extended, frame->data);
-                    for (const auto& value : values) {
-                        output << ' ' << value.name << '=';
-                        if (value.description) {
-                            output << *value.description << " (" << std::fixed << std::setprecision(6)
-                                   << value.value;
-                            if (!value.unit.empty()) {
-                                output << ' ' << value.unit;
-                            }
-                            output << ')';
-                        } else {
-                            output << std::fixed << std::setprecision(6) << value.value;
-                            if (!value.unit.empty()) {
-                                output << ' ' << value.unit;
-                            }
-                        }
-                    }
-                }
-                output << std::dec << std::setfill(' ') << '\n';
-            } else {
-                output << std::fixed << std::setprecision(6)
-                       << static_cast<double>(record->timestamp_ns) / 1'000'000'000.0
-                       << " protocol=" << static_cast<unsigned>(record->protocol)
-                       << " stream=" << record->stream_id
-                       << " bytes=" << record->payload.size() << '\n';
-            }
+            print_full_record(output, *record);
             continue;
         }
+        const auto frame = protocol::can::decode(*record);
         if (!frame) {
             if (mode == PrintMode::variable) {
                 output << (record->protocol == trace::ProtocolId::can ? "N/A (CAN values unavailable)\n"
@@ -252,17 +222,22 @@ void Session::print(std::ostream& output,
             continue;
         }
         if (mode == PrintMode::message) {
-            if (!frame->message_name.empty()) {
-                output << frame->message_name << '\n';
-            } else if (const auto* message = dbc_.find_message(frame->can_id, frame->extended)) {
-                output << message->name << '\n';
+            output << row << ' ' << std::fixed << std::setprecision(6)
+                   << static_cast<double>(record->timestamp_ns) / 1'000'000'000.0 << ' ';
+            if (const auto* message = dbc_.find_message(frame->can_id, frame->extended)) {
+                output << message->name;
+            } else if (!frame->message_name.empty()) {
+                output << frame->message_name;
             } else {
-                output << "N/A (message name unavailable)\n";
+                output << "N/A (message name unavailable)";
             }
+            output << '\n';
             continue;
         }
         if (mode == PrintMode::id) {
-            output << std::hex << std::uppercase << frame->can_id << std::dec << '\n';
+            output << row << ' ' << std::fixed << std::setprecision(6)
+                   << static_cast<double>(record->timestamp_ns) / 1'000'000'000.0 << ' '
+                   << std::hex << std::uppercase << frame->can_id << std::dec << '\n';
             continue;
         }
         const auto values = dbc_.empty()
@@ -295,6 +270,165 @@ void Session::print(std::ostream& output,
         output << '\n';
     }
 }
+
+void Session::print_full_record(std::ostream& output, const trace::Record& record) const {
+    const auto frame = protocol::can::decode(record);
+    if (frame) {
+        output << std::fixed << std::setprecision(6)
+               << static_cast<double>(frame->timestamp_ns) / 1'000'000'000.0 << " CAN"
+               << (frame->fd ? "FD " : " ") << frame->stream_id << ' '
+               << (frame->direction == trace::Direction::rx ? "Rx " : "Tx ")
+               << std::hex << std::uppercase << frame->can_id
+               << (frame->extended ? "x " : " ") << std::dec
+               << frame->message_name << " [" << frame->data.size() << ']';
+        for (const auto byte : frame->data) {
+            output << ' ' << std::hex << std::setw(2) << std::setfill('0')
+                   << static_cast<unsigned>(byte);
+        }
+        if (!dbc_.empty()) {
+            const auto values = dbc_.decode(frame->can_id, frame->extended, frame->data);
+            for (const auto& value : values) {
+                output << ' ' << value.name << '=';
+                if (value.description) {
+                    output << *value.description << " (" << std::fixed << std::setprecision(6)
+                           << value.value;
+                    if (!value.unit.empty()) {
+                        output << ' ' << value.unit;
+                    }
+                    output << ')';
+                } else {
+                    output << std::fixed << std::setprecision(6) << value.value;
+                    if (!value.unit.empty()) {
+                        output << ' ' << value.unit;
+                    }
+                }
+            }
+        }
+        output << std::dec << std::setfill(' ') << '\n';
+    } else {
+        output << std::fixed << std::setprecision(6)
+               << static_cast<double>(record.timestamp_ns) / 1'000'000'000.0
+               << " protocol=" << static_cast<unsigned>(record.protocol)
+               << " stream=" << record.stream_id
+               << " bytes=" << record.payload.size() << '\n';
+    }
+}
+
+bool Session::print_variable(std::ostream& output,
+                             const std::string& signal_name,
+                             std::size_t limit,
+                             std::size_t offset,
+                             std::string& error) const {
+    if (signal_name.empty()) {
+        error = "A DBC signal name is required";
+        return false;
+    }
+    if (dbc_.empty()) {
+        error = "No DBC database is loaded";
+        return false;
+    }
+    const auto signal_names = dbc_.signal_names();
+    if (std::find(signal_names.begin(), signal_names.end(), signal_name) == signal_names.end()) {
+        error = "Unknown DBC signal: " + signal_name;
+        return false;
+    }
+
+    output << "Index Timestamp Value\n";
+    const auto end = offset < selection_.size()
+                         ? offset + std::min(limit, selection_.size() - offset)
+                         : offset;
+    for (std::size_t row = offset; row < end; ++row) {
+        const auto record = reader_.read(selection_[row]);
+        if (!record || record->protocol != trace::ProtocolId::can) {
+            continue;
+        }
+        const auto frame = protocol::can::decode(*record);
+        if (!frame) {
+            continue;
+        }
+        const auto values = dbc_.decode(frame->can_id, frame->extended, frame->data);
+        const auto value = std::find_if(values.begin(), values.end(), [&signal_name](const auto& item) {
+            return item.name == signal_name;
+        });
+        if (value == values.end()) {
+            continue;
+        }
+        output << row << ' ' << std::fixed << std::setprecision(6)
+               << static_cast<double>(frame->timestamp_ns) / 1'000'000'000.0 << ' ' << value->value << '\n';
+    }
+    return true;
+}
+
+bool Session::print_index(std::ostream& output,
+                          std::size_t first,
+                          std::size_t last,
+                          std::string& error) const {
+    if (!has_trace()) {
+        error = "No communication trace is open";
+        return false;
+    }
+    if (selection_.empty()) {
+        error = "Cannot print index: current selection is empty";
+        return false;
+    }
+    if (first > last) {
+        error = "Index range must be inclusive with first <= last";
+        return false;
+    }
+    if (first >= selection_.size() || last >= selection_.size()) {
+        error = "Index out of bounds (current selection has " + std::to_string(selection_.size()) +
+                " records)";
+        return false;
+    }
+    for (std::size_t index = first; index <= last; ++index) {
+        const auto record = reader_.read(selection_[index]);
+        if (!record) {
+            error = "Cannot read record " + std::to_string(selection_[index]);
+            return false;
+        }
+        print_full_record(output, *record);
+    }
+    return true;
+}
+
+bool Session::print_filter(std::ostream& output,
+                           const std::string& expression,
+                           std::string& error) const {
+    auto parsed = Query::parse(expression, error);
+    if (!parsed) {
+        return false;
+    }
+    if (!has_trace()) {
+        error = "No communication trace is open";
+        return false;
+    }
+    auto query = std::move(*parsed);
+    for (const auto source_index : selection_) {
+        const auto record = reader_.read(source_index);
+        if (!record) {
+            error = "Cannot read record " + std::to_string(source_index);
+            return false;
+        }
+        if (query.matches(*record, dbc_)) {
+            print_full_record(output, *record);
+        }
+    }
+    return true;
+}
+
+void Session::print_history(std::ostream& output) const {
+    for (std::size_t index = 0; index < history_.size(); ++index) {
+        output << index + 1U << ' ' << history_[index] << '\n';
+    }
+}
+
+void Session::record_history(std::string command) {
+    if (!command.empty()) {
+        history_.push_back(std::move(command));
+    }
+}
+
+void Session::clear_history() { history_.clear(); }
 
 void Session::status(std::ostream& output) const {
     if (!has_trace()) {
