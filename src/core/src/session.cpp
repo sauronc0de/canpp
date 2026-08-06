@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <limits>
 #include <numeric>
 #include <ostream>
 #include <sstream>
@@ -188,7 +189,62 @@ void Session::print(std::ostream& output, std::size_t limit, std::size_t offset)
 void Session::print(std::ostream& output,
                     PrintMode mode,
                     std::size_t limit,
-                    std::size_t offset) const {
+                    std::size_t offset,
+                    bool list) const {
+    if (list) {
+        std::vector<std::string> names;
+        for (const auto source_index : selection_) {
+            const auto record = reader_.read(source_index);
+            if (!record) {
+                continue;
+            }
+            std::string value;
+            if (mode == PrintMode::timestamp) {
+                std::ostringstream rendered;
+                rendered << std::fixed << std::setprecision(6)
+                         << static_cast<double>(record->timestamp_ns) / 1'000'000'000.0;
+                value = rendered.str();
+            } else {
+                const auto frame = protocol::can::decode(*record);
+                if (!frame) {
+                    continue;
+                }
+                if (mode == PrintMode::message) {
+                    if (const auto* message = dbc_.find_message(frame->can_id, frame->extended)) {
+                        value = message->name;
+                    } else {
+                        value = frame->message_name;
+                    }
+                } else if (mode == PrintMode::id) {
+                    std::ostringstream rendered;
+                    rendered << std::hex << std::uppercase << frame->can_id;
+                    value = rendered.str();
+                } else if (mode == PrintMode::variable) {
+                    const auto values = dbc_.empty()
+                                            ? std::vector<protocol::can::DbcSignalValue>{}
+                                            : dbc_.decode(frame->can_id, frame->extended, frame->data);
+                    for (const auto& signal : values) {
+                        if (std::find(names.begin(), names.end(), signal.name) == names.end()) {
+                            names.push_back(signal.name);
+                        }
+                    }
+                    continue;
+                } else {
+                    value = frame->message_name;
+                }
+            }
+            if (!value.empty() &&
+                (mode == PrintMode::id || mode == PrintMode::timestamp ||
+                 std::find(names.begin(), names.end(), value) == names.end())) {
+                names.push_back(std::move(value));
+            }
+        }
+        const auto end = offset < names.size() ? offset + std::min(limit, names.size() - offset) : offset;
+        for (std::size_t index = offset; index < end; ++index) {
+            output << names[index] << '\n';
+        }
+        return;
+    }
     const auto end = offset < selection_.size()
                          ? offset + std::min(limit, selection_.size() - offset)
                          : offset;
@@ -519,12 +575,27 @@ bool Session::print_dbc_status(std::ostream& output, std::string& error) const {
     return true;
 }
 
-bool Session::print_dbc_messages(std::ostream& output, std::string& error) const {
+bool Session::print_dbc_messages(std::ostream& output,
+                                  std::string& error,
+                                  bool list,
+                                  std::size_t limit,
+                                  std::size_t offset) const {
     if (dbc_.empty()) {
         error = "No DBC database is loaded";
         return false;
     }
-    for (const auto& message : dbc_.messages()) {
+    const auto names = dbc_.message_names();
+    if (list) {
+        const auto end = offset < names.size() ? offset + std::min(limit, names.size() - offset) : offset;
+        for (std::size_t index = offset; index < end; ++index) {
+            output << names[index] << '\n';
+        }
+        return true;
+    }
+    const auto& messages = dbc_.messages();
+    const auto end = offset < messages.size() ? offset + std::min(limit, messages.size() - offset) : offset;
+    for (std::size_t index = offset; index < end; ++index) {
+        const auto& message = messages[index];
         output << "Message: " << message.name << '\n'
                << "  ID: 0x" << std::hex << std::uppercase << message.id << std::dec << '\n'
                << "  Extended: " << (message.extended ? "true" : "false") << '\n'
@@ -534,9 +605,83 @@ bool Session::print_dbc_messages(std::ostream& output, std::string& error) const
     return true;
 }
 
+bool Session::print_dbc_variables(std::ostream& output,
+                                  std::string& error,
+                                  bool list,
+                                  std::size_t limit,
+                                  std::size_t offset) const {
+    if (dbc_.empty()) {
+        error = "No DBC database is loaded";
+        return false;
+    }
+    const auto names = dbc_.signal_names();
+    if (list) {
+        const auto end = offset < names.size() ? offset + std::min(limit, names.size() - offset) : offset;
+        for (std::size_t index = offset; index < end; ++index) {
+            output << names[index] << '\n';
+        }
+        return true;
+    }
+    std::size_t index = 0;
+    std::size_t emitted = 0;
+    for (const auto& message : dbc_.messages()) {
+        for (const auto& signal : message.signals) {
+            if (index++ < offset) {
+                continue;
+            }
+            if (emitted++ >= limit) {
+                return true;
+            }
+            output << "Signal: " << signal.name << '\n'
+                   << "  Parent message: " << message.name << '\n'
+                   << "  CAN ID: 0x" << std::hex << std::uppercase << message.id << std::dec << '\n'
+                   << "  Extended: " << (message.extended ? "true" : "false") << '\n'
+                   << "  Parent payload size: " << static_cast<unsigned>(message.size) << '\n'
+                   << "  Start bit: " << signal.start_bit << '\n'
+                   << "  Bit length: " << signal.bit_length << '\n'
+                   << "  Byte order: "
+                   << (signal.byte_order == protocol::can::DbcByteOrder::intel ? "Intel" : "Motorola") << '\n'
+                   << "  Signed: " << (signal.is_signed ? "true" : "false") << '\n'
+                   << "  Factor: " << signal.factor << '\n'
+                   << "  Offset: " << signal.offset << '\n'
+                   << "  Minimum: " << signal.minimum << '\n'
+                   << "  Maximum: " << signal.maximum << '\n'
+                   << "  Units: " << (signal.unit.empty() ? "(none)" : signal.unit) << '\n';
+            if (signal.multiplexer) {
+                output << "  Multiplexing: multiplexer\n";
+            } else if (signal.multiplexer_value) {
+                output << "  Multiplexing: multiplexed (value " << *signal.multiplexer_value << ")\n";
+            } else {
+                output << "  Multiplexing: none\n";
+            }
+            if (signal.value_descriptions.empty()) {
+                output << "  VAL_: (none)\n";
+            } else {
+                std::vector<std::pair<std::uint64_t, std::string>> values(signal.value_descriptions.begin(),
+                                                                            signal.value_descriptions.end());
+                std::sort(values.begin(), values.end(), [&signal](const auto& left, const auto& right) {
+                    if (signal.is_signed) {
+                        return static_cast<std::int64_t>(left.first) < static_cast<std::int64_t>(right.first);
+                    }
+                    return left.first < right.first;
+                });
+                output << "  VAL_:" << '\n';
+                for (const auto& [value, description] : values) {
+                    output << "    " << (signal.is_signed ? std::to_string(static_cast<std::int64_t>(value))
+                                                              : std::to_string(value))
+                           << ": \"" << description << "\"\n";
+                }
+            }
+        }
+    }
+    return true;
+}
+
 bool Session::print_dbc_variable(std::ostream& output,
                                  const std::string& signal_name,
-                                 std::string& error) const {
+                                 std::string& error,
+                                 std::size_t limit,
+                                 std::size_t offset) const {
     if (dbc_.empty()) {
         error = "No DBC database is loaded";
         return false;
@@ -547,12 +692,20 @@ bool Session::print_dbc_variable(std::ostream& output,
     }
 
     bool found = false;
+    std::size_t match_index = 0;
+    std::size_t emitted = 0;
     for (const auto& message : dbc_.messages()) {
         for (const auto& signal : message.signals) {
             if (signal.name != signal_name) {
                 continue;
             }
             found = true;
+            if (match_index++ < offset) {
+                continue;
+            }
+            if (emitted++ >= limit) {
+                return true;
+            }
             output << "Signal: " << signal.name << '\n'
                    << "  Parent message: " << message.name << '\n'
                    << "  CAN ID: 0x" << std::hex << std::uppercase << message.id << std::dec << '\n'

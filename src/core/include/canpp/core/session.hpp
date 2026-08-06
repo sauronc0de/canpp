@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iosfwd>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -44,7 +45,8 @@ public:
     void print(std::ostream& output,
                PrintMode mode,
                std::size_t limit = 20,
-               std::size_t offset = 0) const;
+               std::size_t offset = 0,
+               bool list = false) const;
     bool print_variable(std::ostream& output,
                         const std::string& signal_name,
                         std::size_t limit,
@@ -67,10 +69,21 @@ public:
     void clear_history();
     void status(std::ostream& output) const;
     bool print_dbc_status(std::ostream& output, std::string& error) const;
-    bool print_dbc_messages(std::ostream& output, std::string& error) const;
+    bool print_dbc_messages(std::ostream& output,
+                             std::string& error,
+                             bool list = false,
+                             std::size_t limit = std::numeric_limits<std::size_t>::max(),
+                             std::size_t offset = 0) const;
+    bool print_dbc_variables(std::ostream& output,
+                             std::string& error,
+                             bool list = false,
+                             std::size_t limit = std::numeric_limits<std::size_t>::max(),
+                             std::size_t offset = 0) const;
     bool print_dbc_variable(std::ostream& output,
                             const std::string& signal_name,
-                            std::string& error) const;
+                            std::string& error,
+                            std::size_t limit = std::numeric_limits<std::size_t>::max(),
+                            std::size_t offset = 0) const;
 
     [[nodiscard]] bool has_trace() const;
     [[nodiscard]] const std::filesystem::path& trace_path() const noexcept;

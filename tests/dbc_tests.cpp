@@ -111,6 +111,18 @@ int main() {
     assert(session.print_dbc_messages(dbc_messages, error));
     assert(dbc_messages.str().find("Message: Example\n  ID: 0x100\n  Extended: false\n  Payload size: 8\n  Signal count: 8\n") !=
            std::string::npos);
+    std::ostringstream dbc_message_list;
+    error.clear();
+    assert(session.print_dbc_messages(dbc_message_list, error, true, 1, 1));
+    assert(dbc_message_list.str() == "UnsignedMessage\n");
+    std::ostringstream dbc_variable_list;
+    error.clear();
+    assert(session.print_dbc_variables(dbc_variable_list, error, true, 2, 0));
+    assert(dbc_variable_list.str() == "Speed\nMode\n");
+    std::ostringstream dbc_variable_page;
+    error.clear();
+    assert(session.print_dbc_variable(dbc_variable_page, "Speed", error, 1, 1));
+    assert(dbc_variable_page.str().find("Parent message: Short") != std::string::npos);
     std::ostringstream dbc_variables;
     error.clear();
     assert(session.print_dbc_variable(dbc_variables, "Speed", error));
@@ -142,6 +154,12 @@ int main() {
     std::ostringstream messages;
     session.print(messages, canpp::core::PrintMode::message);
     assert(messages.str() == "Index Timestamp Message\n0 0.000000 Example\n");
+    std::ostringstream message_name_list;
+    session.print(message_name_list, canpp::core::PrintMode::message, 20, 0, true);
+    assert(message_name_list.str() == "Example\n");
+    std::ostringstream signal_name_list;
+    session.print(signal_name_list, canpp::core::PrintMode::variable, 2, 0, true);
+    assert(signal_name_list.str() == "Speed\nMode\n");
     std::ostringstream ids;
     session.print(ids, canpp::core::PrintMode::id);
     assert(ids.str() == "Index Timestamp ID\n0 0.000000 100\n");

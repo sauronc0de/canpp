@@ -1,5 +1,6 @@
 #include "canpp/core/session.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cctype>
 #include <cstdint>
@@ -19,6 +20,13 @@
 #include <cstring>
 #include <readline/history.h>
 #include <readline/readline.h>
+#ifndef _WIN32
+#include <cerrno>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <unistd.h>
+#endif
 #endif
 
 namespace {
@@ -32,6 +40,55 @@ std::vector<std::string> split(const std::string& line) {
     return words;
 }
 
+bool parse_quoted_words(const std::string& line, std::vector<std::string>& words) {
+    words.clear();
+    std::size_t position = 0;
+    while (position < line.size()) {
+        while (position < line.size() && std::isspace(static_cast<unsigned char>(line[position]))) ++position;
+        if (position == line.size()) break;
+        std::string word;
+        char quote = '\0';
+        while (position < line.size()) {
+            const char current = line[position];
+            if (quote != '\0') {
+                if (current == quote) {
+                    quote = '\0';
+                    ++position;
+                } else if (current == '\\' && position + 1U < line.size()) {
+                    word += line[position + 1U];
+                    position += 2U;
+                } else {
+                    word += current;
+                    ++position;
+                }
+            } else if (std::isspace(static_cast<unsigned char>(current))) {
+                break;
+            } else if (current == '\\' && position + 1U < line.size()) {
+                word += line[position + 1U];
+                position += 2U;
+            } else if (current == '\'' || current == '"') {
+                quote = current;
+                ++position;
+            } else {
+                word += current;
+                ++position;
+            }
+        }
+        if (quote != '\0') return false;
+        words.push_back(std::move(word));
+    }
+    return true;
+}
+
+void print_matching_lines(std::ostream& output, const std::string& text, const std::string& pattern) {
+    std::istringstream input(text);
+    for (std::string line; std::getline(input, line);) {
+        if (line.find(pattern) != std::string::npos) {
+            output << line << '\n';
+        }
+    }
+}
+
 template <typename Integer>
 bool parse_number(std::string text, Integer& output, int base) {
     if (base == 16 && text.size() > 2U && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
@@ -39,6 +96,73 @@ bool parse_number(std::string text, Integer& output, int base) {
     }
     const auto result = std::from_chars(text.data(), text.data() + text.size(), output, base);
     return result.ec == std::errc{} && result.ptr == text.data() + text.size();
+}
+
+struct OutputSuffix {
+    bool list = false;
+    bool grep = false;
+    std::string grep_pattern;
+    std::size_t limit = 20;
+    std::size_t offset = 0;
+    bool named_limit = false;
+    bool named_offset = false;
+};
+
+bool parse_output_suffix(const std::vector<std::string>& args,
+                         std::size_t start,
+                         std::vector<std::string>& base,
+                         OutputSuffix& suffix,
+                         std::string& error,
+                         std::size_t default_limit = 20) {
+    base.clear();
+    suffix = OutputSuffix{};
+    suffix.limit = default_limit;
+    for (std::size_t index = start; index < args.size(); ++index) {
+        const auto& argument = args[index];
+        if (argument == "list") {
+            if (suffix.list) {
+                error = "Invalid arguments: duplicate list";
+                return false;
+            }
+            suffix.list = true;
+        } else if (argument == "grep") {
+            if (suffix.grep || index + 1U == args.size() || args[index + 1U].empty()) {
+                error = "Usage: ... grep <pattern>";
+                return false;
+            }
+            suffix.grep = true;
+            suffix.grep_pattern = args[++index];
+        } else if (argument == "limit" || argument == "offset") {
+            if (index + 1U == args.size()) {
+                error = "Usage: ... " + argument + " N";
+                return false;
+            }
+            std::size_t value{};
+            if (!parse_number(args[index + 1U], value, 10)) {
+                error = "Invalid " + argument + ": expected a non-negative integer";
+                return false;
+            }
+            if (argument == "limit") {
+                if (suffix.named_limit) {
+                    error = "Invalid arguments: duplicate limit";
+                    return false;
+                }
+                suffix.named_limit = true;
+                suffix.limit = value;
+            } else {
+                if (suffix.named_offset) {
+                    error = "Invalid arguments: duplicate offset";
+                    return false;
+                }
+                suffix.named_offset = true;
+                suffix.offset = value;
+            }
+            ++index;
+        } else {
+            base.push_back(argument);
+        }
+    }
+    return true;
 }
 
 bool from_original(const std::vector<std::string>& args, std::size_t index) {
@@ -175,9 +299,10 @@ void print_help() {
         << "import asc <input.asc> <output.commtrace>\n"
         << "open <file.commtrace>\n"
         << "load dbc <file.dbc>\n"
-        << "dbc status\n"
-        << "dbc messages\n"
-        << "dbc variable <signal-name>\n"
+        << "dbc status [grep <pattern>]\n"
+        << "dbc messages [list] [grep <pattern>] [limit N] [offset N]\n"
+        << "dbc variables [list] [grep <pattern>] [limit N] [offset N]\n"
+        << "dbc variable <signal-name> [grep <pattern>] [limit N] [offset N]\n"
         << "gui\n"
         << "status | reset\n"
         << "history\n"
@@ -191,12 +316,14 @@ void print_help() {
         << "filter range <event-expression> [original]\n"
         << "  refs: signal.<Name>, message.name/id/extended, record.stream_id/protocol/direction, timestamp_ns, time\n"
         << "  ops: == != < <= > >= && || ! (precedence: !, comparison, &&, ||)\n"
-        << "print [limit] [offset]\n"
-        << "print message|id|timestamp [limit] [offset]\n"
-        << "print variable[s] <SignalName> [& <SignalName> ...] [limit] [offset]\n"
+        << "print [list] [limit] [offset] [grep <pattern>]\n"
+        << "print message[s]|id|timestamp [list] [limit] [offset] [grep <pattern>]\n"
+        << "print variable[s] [<SignalName> [& <SignalName> ...]] [list] [limit] [offset] [grep <pattern>]\n"
+        << "  named suffixes (list, grep, limit, offset) may appear in any order; invalid combinations are errors\n"
         << "print index <index> [<last-index>]\n"
         << "print filter <expression> (current selection; non-mutating)\n"
         << "save <output.commtrace>\n"
+        << "Ctrl+C: cancel the current line; press twice consecutively to exit\n"
         << "exit\n";
 }
 
@@ -221,19 +348,58 @@ bool execute_line(canpp::core::Session& session,
         return true;
     }
     if (args[0] == "dbc") {
-        if (args.size() < 2U || args.size() > 3U ||
-            (args[1] != "status" && args[1] != "messages" && args[1] != "variable") ||
-            (args[1] != "variable" && args.size() != 2U) ||
-            (args[1] == "variable" && args.size() != 3U)) {
-            std::cerr << "Usage: dbc status | dbc messages | dbc variable <signal-name>\n";
+        std::vector<std::string> parsed_args;
+        if (!parse_quoted_words(line, parsed_args) || parsed_args.size() < 2U) {
+            std::cerr << "Usage: dbc status | dbc messages [list] | dbc variables [list] | dbc variable <signal-name>\n";
             return true;
         }
-        if (args[1] == "status") {
-            success = session.print_dbc_status(std::cout, error);
-        } else if (args[1] == "messages") {
-            success = session.print_dbc_messages(std::cout, error);
+        std::vector<std::string> command_args;
+        OutputSuffix suffix;
+        if (!parse_output_suffix(parsed_args, 2U, command_args, suffix, error,
+                                 static_cast<std::size_t>(-1))) {
+            std::cerr << error << '\n';
+            return true;
+        }
+        const auto command = parsed_args[1];
+        std::ostringstream rendered;
+        std::ostream& output = suffix.grep ? static_cast<std::ostream&>(rendered) : std::cout;
+        if (command == "status") {
+            if (!command_args.empty() || suffix.list || suffix.named_limit || suffix.named_offset) {
+                std::cerr << "Invalid dbc status arguments\n";
+                return true;
+            }
+            success = session.print_dbc_status(output, error);
+        } else if (command == "messages" || command == "variables") {
+            if (!command_args.empty()) {
+                std::cerr << "Invalid dbc catalog arguments\n";
+                return true;
+            }
+            if (command == "messages") {
+                success = session.print_dbc_messages(output, error, suffix.list, suffix.limit, suffix.offset);
+            } else {
+                success = session.print_dbc_variables(output, error, suffix.list, suffix.limit, suffix.offset);
+            }
+        } else if (command == "variable") {
+            if (suffix.list && command_args.empty()) {
+                success = session.print_dbc_variables(output, error, true, suffix.limit, suffix.offset);
+            } else {
+                if (suffix.list) {
+                    std::cerr << "Invalid dbc variable arguments: list cannot be combined with a signal name\n";
+                    return true;
+                }
+                if (command_args.size() != 1U) {
+                    std::cerr << "Usage: dbc variable <signal-name> [grep <pattern>] [limit N] [offset N]\n";
+                    return true;
+                }
+                success = session.print_dbc_variable(output, command_args.front(), error,
+                                                     suffix.limit, suffix.offset);
+            }
         } else {
-            success = session.print_dbc_variable(std::cout, args[2], error);
+            std::cerr << "Usage: dbc status | dbc messages [list] | dbc variables [list] | dbc variable <signal-name>\n";
+            return true;
+        }
+        if (success && suffix.grep) {
+            print_matching_lines(std::cout, rendered.str(), suffix.grep_pattern);
         }
         if (!success) {
             std::cerr << "Error: " << error << '\n';
@@ -296,76 +462,112 @@ bool execute_line(canpp::core::Session& session,
             }
             return true;
         }
-        std::size_t limit = 20;
-        std::size_t offset = 0;
+        std::vector<std::string> parsed_args;
+        if (!parse_quoted_words(line, parsed_args)) {
+            std::cerr << "Usage: print ... grep <pattern>\n";
+            return true;
+        }
+        std::vector<std::string> command_args;
+        OutputSuffix suffix;
+        if (!parse_output_suffix(parsed_args, 1U, command_args, suffix, error)) {
+            std::cerr << (error == "Usage: ... grep <pattern>" ? "Usage: print ... grep <pattern>" : error) << '\n';
+            return true;
+        }
+        command_args.insert(command_args.begin(), "print");
+        std::size_t limit = suffix.limit;
+        std::size_t offset = suffix.offset;
         auto mode = canpp::core::PrintMode::full;
         bool explicit_mode = false;
         std::vector<std::string> variable_names;
         std::size_t variable_range_start = 0;
         bool variable_signal = false;
-        if (args.size() > 1U) {
-            if (args[1] == "message") {
+        if (command_args.size() > 1U) {
+            if (command_args[1] == "message" || command_args[1] == "messages") {
                 mode = canpp::core::PrintMode::message;
-            } else if (args[1] == "id") {
+            } else if (command_args[1] == "id") {
                 mode = canpp::core::PrintMode::id;
-            } else if (args[1] == "timestamp") {
+            } else if (command_args[1] == "timestamp") {
                 mode = canpp::core::PrintMode::timestamp;
-            } else if (args[1] == "variable" || args[1] == "variables") {
+            } else if (command_args[1] == "variable" || command_args[1] == "variables") {
                 mode = canpp::core::PrintMode::variable;
                 variable_signal = true;
-                if (args.size() < 3U || parse_number(args[2], limit, 10)) {
-                    std::cerr << "Usage: print variable <SignalName> [& <SignalName> ...] [limit] [offset]\n";
-                    return true;
-                }
                 std::size_t argument = 2U;
-                bool expect_signal = true;
-                while (argument < args.size() && expect_signal) {
-                    if (args[argument] == "&") {
+                if (argument < command_args.size() && !parse_number(command_args[argument], limit, 10)) {
+                    bool expect_signal = true;
+                    while (argument < command_args.size() && expect_signal) {
+                        if (command_args[argument] == "&") {
+                            std::cerr << "Malformed variable list: expected a signal name after '&'\n";
+                            return true;
+                        }
+                        variable_names.push_back(command_args[argument++]);
+                        expect_signal = false;
+                        if (argument < command_args.size() && command_args[argument] == "&") {
+                            ++argument;
+                            expect_signal = true;
+                        }
+                    }
+                    if (expect_signal) {
                         std::cerr << "Malformed variable list: expected a signal name after '&'\n";
                         return true;
                     }
-                    variable_names.push_back(args[argument++]);
-                    expect_signal = false;
-                    if (argument < args.size() && args[argument] == "&") {
-                        ++argument;
-                        expect_signal = true;
-                    }
-                }
-                if (expect_signal) {
-                    std::cerr << "Malformed variable list: expected a signal name after '&'\n";
+                } else if (!suffix.list) {
+                    std::cerr << "Usage: print variable <SignalName> [& <SignalName> ...]\n";
                     return true;
                 }
                 variable_range_start = argument;
-            } else if (!parse_number(args[1], limit, 10)) {
+            } else if (!parse_number(command_args[1], limit, 10)) {
                 std::cerr << "Invalid print mode\n";
                 return true;
             }
             explicit_mode = mode != canpp::core::PrintMode::full;
         }
         const auto range_start = variable_signal ? variable_range_start : explicit_mode ? 2U : 1U;
-        if (args.size() > range_start + 2U ||
-            (mode != canpp::core::PrintMode::variable && args.size() > 4U)) {
+        if (variable_signal && suffix.list && !variable_names.empty()) {
+            std::cerr << "Invalid print arguments: list cannot be combined with signal names\n";
+            return true;
+        }
+        if (command_args.size() > range_start + 2U ||
+            (mode != canpp::core::PrintMode::variable && command_args.size() > 4U)) {
             std::cerr << "Invalid print arguments\n";
             return true;
         }
-        if (args.size() > range_start && !parse_number(args[range_start], limit, 10)) {
+        if ((suffix.named_limit || suffix.named_offset) && command_args.size() > range_start) {
+            std::cerr << "Invalid print arguments: use either positional or named limit/offset\n";
+            return true;
+        }
+        if (command_args.size() > range_start && !parse_number(command_args[range_start], limit, 10)) {
             std::cerr << "Invalid print range\n";
             return true;
         }
-        if (args.size() > range_start + 1U && !parse_number(args[range_start + 1U], offset, 10)) {
+        if (command_args.size() > range_start + 1U && !parse_number(command_args[range_start + 1U], offset, 10)) {
             std::cerr << "Invalid print range\n";
             return true;
         }
+        const bool preserve_no_dbc_variable_error =
+            variable_signal && !suffix.list && session.dbc_path().empty();
+        if (!session.has_trace() && !preserve_no_dbc_variable_error) {
+            std::cerr << "Error: No communication trace is open\n";
+            return true;
+        }
+        std::ostringstream rendered;
+        bool print_success = true;
         if (variable_signal) {
-            if (variable_names.size() == 1U) {
-                if (!session.print_variable(std::cout, variable_names.front(), limit, offset, error)) {
-                    std::cerr << "Error: " << error << '\n';
-                }
-            } else if (!session.print_variables(std::cout, variable_names, limit, offset, error)) {
-                std::cerr << "Error: " << error << '\n';
+            if (suffix.list && variable_names.empty()) {
+                session.print(rendered, mode, limit, offset, true);
+            } else if (variable_names.size() == 1U) {
+                print_success = session.print_variable(rendered, variable_names.front(), limit, offset, error);
+            } else {
+                print_success = session.print_variables(rendered, variable_names, limit, offset, error);
             }
         } else {
-            session.print(std::cout, mode, limit, offset);
+            session.print(rendered, mode, limit, offset, suffix.list);
+        }
+        if (!print_success) {
+            std::cerr << "Error: " << error << '\n';
+        } else if (suffix.grep) {
+            print_matching_lines(std::cout, rendered.str(), suffix.grep_pattern);
+        } else {
+            std::cout << rendered.str();
         }
         return true;
     } else if (args[0] == "filter" && args.size() >= 2U) {
@@ -471,7 +673,16 @@ std::vector<std::string> completion_candidates(const std::string& line,
         return {"dbc"};
     }
     if (completed.size() == 1U && completed[0] == "dbc") {
-        return {"status", "messages", "variable"};
+        return {"status", "messages", "variables", "variable"};
+    }
+    if (completed.size() == 2U && completed[0] == "dbc" &&
+        (completed[1] == "messages" || completed[1] == "variables" || completed[1] == "variable")) {
+        if (completed[1] == "variable" && completion_session != nullptr) {
+            auto candidates = completion_session->dbc_signal_names();
+            candidates.insert(candidates.end(), {"list", "grep", "limit", "offset"});
+            return candidates;
+        }
+        return {"list", "grep", "limit", "offset"};
     }
     if (completed.size() == 2U && completed[0] == "dbc" && completed[1] == "variable" &&
         completion_session != nullptr) {
@@ -481,7 +692,7 @@ std::vector<std::string> completion_candidates(const std::string& line,
         return {"asc"};
     }
     if (completed.size() == 1U && completed[0] == "print") {
-        return {"message", "id", "timestamp", "variable", "variables", "index", "filter"};
+        return {"message", "messages", "id", "timestamp", "variable", "variables", "index", "filter", "list", "grep", "limit", "offset"};
     }
     if (completed.size() == 1U && completed[0] == "filter") {
         // Readline's `start` points at the current token, so use `text`
@@ -495,9 +706,19 @@ std::vector<std::string> completion_candidates(const std::string& line,
     if (completed.size() == 2U && completed[0] == "print" && completed[1] == "filter") {
         return {"signal.", "message.", "record.", "timestamp_ns", "time"};
     }
+    if (completed.size() == 2U && completed[0] == "print" &&
+        (completed[1] == "message" || completed[1] == "messages" || completed[1] == "id" ||
+         completed[1] == "timestamp")) {
+        return {"list", "grep", "limit", "offset"};
+    }
     if (completed.size() >= 2U && completed[0] == "print" &&
         (completed[1] == "variable" || completed[1] == "variables") && completion_session != nullptr) {
-        if (completed.size() == 2U || completed.back() == "&") {
+        if (completed.size() == 2U) {
+            auto candidates = completion_session->dbc_signal_names();
+            candidates.insert(candidates.end(), {"list", "grep", "limit", "offset"});
+            return candidates;
+        }
+        if (completed.back() == "&") {
             return completion_session->dbc_signal_names();
         }
         if (completed.size() >= 3U && !current_word_is_partial && completed.back() != "&") {
@@ -605,6 +826,145 @@ void configure_completion() {
     rl_completer_word_break_characters = word_break_characters.c_str();
 }
 
+#ifndef _WIN32
+
+std::string readline_callback_line;
+bool readline_callback_line_ready = false;
+bool readline_callback_eof = false;
+volatile sig_atomic_t sigint_pipe_write_fd = -1;
+
+void readline_line_handler(char* raw_line) {
+    if (raw_line == nullptr) {
+        readline_callback_eof = true;
+        return;
+    }
+    readline_callback_line.assign(raw_line);
+    std::free(raw_line);
+    readline_callback_line_ready = true;
+}
+
+void sigint_handler(int /*signal*/) {
+    const char marker = 1;
+    if (sigint_pipe_write_fd != -1) {
+        const auto result = write(sigint_pipe_write_fd, &marker, sizeof(marker));
+        (void)result;
+    }
+}
+
+bool install_sigint_handler(int& read_fd, int& write_fd, struct sigaction& previous_action) {
+    int pipe_fds[2];
+    if (pipe(pipe_fds) != 0) {
+        return false;
+    }
+    const int flags = fcntl(pipe_fds[1], F_GETFL, 0);
+    if (flags == -1 || fcntl(pipe_fds[1], F_SETFL, flags | O_NONBLOCK) == -1) {
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+        return false;
+    }
+    // Publish the descriptor before installing the handler so an interrupt
+    // arriving during setup can never observe an invalid write descriptor.
+    read_fd = pipe_fds[0];
+    write_fd = pipe_fds[1];
+    sigint_pipe_write_fd = write_fd;
+    struct sigaction action{};
+    action.sa_handler = sigint_handler;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGINT, &action, &previous_action) != 0) {
+        sigint_pipe_write_fd = -1;
+        close(read_fd);
+        close(write_fd);
+        read_fd = -1;
+        write_fd = -1;
+        return false;
+    }
+    return true;
+}
+
+void restore_sigint_handler(int read_fd, int write_fd, const struct sigaction& previous_action) {
+    sigint_pipe_write_fd = -1;
+    (void)sigaction(SIGINT, &previous_action, nullptr);
+    close(read_fd);
+    close(write_fd);
+}
+
+void cancel_readline_input() {
+    // A bell is readline's supported abort command and also leaves
+    // incremental reverse search mode before replacing the editable line.
+    rl_pending_input = '\a';
+    rl_callback_read_char();
+    rl_replace_line("", 0);
+    rl_clear_message();
+    rl_on_new_line_with_prompt();
+    rl_redisplay();
+}
+
+void run_readline(canpp::core::Session& session, const std::filesystem::path& cli_path) {
+    int signal_read_fd = -1;
+    int signal_write_fd = -1;
+    struct sigaction previous_action{};
+    if (!install_sigint_handler(signal_read_fd, signal_write_fd, previous_action)) {
+        std::cerr << "Unable to install Ctrl+C handler\n";
+        return;
+    }
+
+    rl_catch_signals = 0;
+    readline_callback_line.clear();
+    readline_callback_line_ready = false;
+    readline_callback_eof = false;
+    rl_callback_handler_install("canpp> ", readline_line_handler);
+
+    bool stop = false;
+    bool interrupted = false;
+    while (!stop && !readline_callback_eof) {
+        struct pollfd descriptors[2]{{STDIN_FILENO, POLLIN, 0}, {signal_read_fd, POLLIN, 0}};
+        int poll_result;
+        do {
+            poll_result = poll(descriptors, 2, -1);
+        } while (poll_result < 0 && errno == EINTR);
+        if (poll_result < 0) {
+            std::cerr << "Unable to read console input\n";
+            break;
+        }
+
+        if ((descriptors[1].revents & (POLLIN | POLLERR | POLLHUP)) != 0) {
+            char markers[32];
+            const auto marker_count = read(signal_read_fd, markers, sizeof(markers));
+            if (marker_count > 0) {
+                for (ssize_t marker = 0; marker < marker_count && !stop; ++marker) {
+                    if (interrupted) {
+                        stop = true;
+                    } else {
+                        interrupted = true;
+                        cancel_readline_input();
+                    }
+                }
+            }
+        }
+        if (!stop && (descriptors[0].revents & (POLLIN | POLLERR | POLLHUP)) != 0) {
+            // Any ordinary input between interrupts makes the next Ctrl+C a
+            // fresh cancellation rather than an exit request.
+            interrupted = false;
+            rl_callback_read_char();
+        }
+        if (readline_callback_line_ready) {
+            const std::string line = std::move(readline_callback_line);
+            readline_callback_line_ready = false;
+            if (!line.empty()) {
+                add_history(line.c_str());
+            }
+            if (!execute_line(session, line, cli_path)) {
+                stop = true;
+            }
+        }
+    }
+
+    rl_callback_handler_remove();
+    restore_sigint_handler(signal_read_fd, signal_write_fd, previous_action);
+}
+
+#endif
+
 #endif
 
 } // namespace
@@ -618,6 +978,11 @@ int main(int argc, char** argv) {
     rl_attempted_completion_function = complete_line;
     configure_completion();
     initialize_history();
+#ifndef _WIN32
+    run_readline(session, cli_path);
+#else
+    // Readline is normally unavailable on Windows; retain a simple fallback
+    // for ports that provide a compatible implementation.
     for (;;) {
         std::cout.flush();
         char* raw_line = readline("canpp> ");
@@ -633,6 +998,7 @@ int main(int argc, char** argv) {
             break;
         }
     }
+#endif
     save_history();
 #else
     for (std::string line; std::cout << "canpp> " && std::getline(std::cin, line);) {
