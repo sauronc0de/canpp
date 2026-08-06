@@ -34,6 +34,8 @@ int main(int argc, char** argv) {
     const auto directory = std::filesystem::temp_directory_path();
     const auto input_path = directory / "canpp_trace_cli_test_input.txt";
     const auto output_path = directory / "canpp_trace_cli_test_output.txt";
+    const auto batch_output_path = directory / "canpp_trace_cli_test_batch_output.txt";
+    const auto script_path = directory / "canpp_trace_cli_test_script.canpp";
     const auto trace_path = directory / "canpp_trace_cli_test.commtrace";
     const auto dbc_path = directory / "canpp_trace_cli_test.dbc";
     {
@@ -102,8 +104,41 @@ int main(int argc, char** argv) {
     assert(text.find("Invalid index: expected a non-negative integer") != std::string::npos);
     assert(text.find("Index out of bounds") != std::string::npos);
 
+    {
+        std::ofstream script(script_path);
+        script << "open " << trace_path.string() << "\n"
+               << "load dbc " << dbc_path.string() << "\n"
+               << "print messages list\n";
+    }
+    const auto executable = shell_quote(argv[1]);
+    const auto command_line = executable + " --command " + shell_quote("open " + trace_path.string()) +
+                              " --command " + shell_quote("load dbc " + dbc_path.string()) +
+                              " --command 'print messages list' > " + shell_quote(batch_output_path) + " 2>&1";
+    assert(std::system(command_line.c_str()) == 0);
+    std::ifstream batch_output(batch_output_path);
+    const std::string batch_text{std::istreambuf_iterator<char>(batch_output), std::istreambuf_iterator<char>()};
+    assert(batch_text.find("Canpp communication trace CLI") == std::string::npos);
+    assert(batch_text.find("canpp> ") == std::string::npos);
+    assert(batch_text.find("Example") != std::string::npos);
+
+    const auto script_command = executable + " --script " + shell_quote(script_path) +
+                                " > " + shell_quote(batch_output_path) + " 2>&1";
+    assert(std::system(script_command.c_str()) == 0);
+    std::ifstream script_output(batch_output_path);
+    const std::string script_text{std::istreambuf_iterator<char>(script_output), std::istreambuf_iterator<char>()};
+    assert(script_text.find("Example") != std::string::npos);
+
+    const auto stdin_command = executable + " --stdin < " + shell_quote(script_path) +
+                                " > " + shell_quote(batch_output_path) + " 2>&1";
+    assert(std::system(stdin_command.c_str()) == 0);
+    std::ifstream stdin_output(batch_output_path);
+    const std::string stdin_text{std::istreambuf_iterator<char>(stdin_output), std::istreambuf_iterator<char>()};
+    assert(stdin_text.find("Example") != std::string::npos);
+
     std::filesystem::remove(input_path);
     std::filesystem::remove(output_path);
     std::filesystem::remove(trace_path);
     std::filesystem::remove(dbc_path);
+    std::filesystem::remove(batch_output_path);
+    std::filesystem::remove(script_path);
 }

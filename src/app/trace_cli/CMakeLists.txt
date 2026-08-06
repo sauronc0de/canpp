@@ -3,7 +3,7 @@ add_executable(Canpp main.cpp)
 add_executable(canpp_trace_cli ALIAS Canpp)
 target_link_libraries(Canpp
   PRIVATE
-    canpp::trace_core
+    canpp::application
     canpp::project_options
 )
 target_compile_features(Canpp PRIVATE cxx_std_23)

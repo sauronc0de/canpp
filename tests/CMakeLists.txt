@@ -1,3 +1,13 @@
+add_executable(canpp_application_tests application_tests.cpp)
+target_compile_options(canpp_application_tests PRIVATE
+  $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-UNDEBUG>
+  $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/U;NDEBUG>
+)
+target_link_libraries(canpp_application_tests PRIVATE canpp::application canpp::project_options)
+target_compile_features(canpp_application_tests PRIVATE cxx_std_23)
+set_target_properties(canpp_application_tests PROPERTIES CXX_EXTENSIONS OFF UNITY_BUILD OFF)
+add_test(NAME canpp_application_tests COMMAND canpp_application_tests)
+
 add_executable(canpp_dbc_tests dbc_tests.cpp)
 target_compile_options(canpp_dbc_tests PRIVATE
   $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-UNDEBUG>

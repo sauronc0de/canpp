@@ -211,6 +211,7 @@ if(ENABLE_RENDER)
 endif()
 add_subdirectory(src/libraries)
 add_subdirectory(src/core)
+add_subdirectory(src/application)
 
 if(ENABLE_RENDER)
   add_subdirectory(src/render)
