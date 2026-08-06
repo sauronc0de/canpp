@@ -175,6 +175,9 @@ void print_help() {
         << "import asc <input.asc> <output.commtrace>\n"
         << "open <file.commtrace>\n"
         << "load dbc <file.dbc>\n"
+        << "dbc status\n"
+        << "dbc messages\n"
+        << "dbc variable <signal-name>\n"
         << "gui\n"
         << "status | reset\n"
         << "history\n"
@@ -190,7 +193,7 @@ void print_help() {
         << "  ops: == != < <= > >= && || ! (precedence: !, comparison, &&, ||)\n"
         << "print [limit] [offset]\n"
         << "print message|id|timestamp [limit] [offset]\n"
-        << "print variable[s] <SignalName> [limit] [offset]\n"
+        << "print variable[s] <SignalName> [& <SignalName> ...] [limit] [offset]\n"
         << "print index <index> [<last-index>]\n"
         << "print filter <expression> (current selection; non-mutating)\n"
         << "save <output.commtrace>\n"
@@ -215,6 +218,26 @@ bool execute_line(canpp::core::Session& session,
     }
     if (args[0] == "status") {
         session.status(std::cout);
+        return true;
+    }
+    if (args[0] == "dbc") {
+        if (args.size() < 2U || args.size() > 3U ||
+            (args[1] != "status" && args[1] != "messages" && args[1] != "variable") ||
+            (args[1] != "variable" && args.size() != 2U) ||
+            (args[1] == "variable" && args.size() != 3U)) {
+            std::cerr << "Usage: dbc status | dbc messages | dbc variable <signal-name>\n";
+            return true;
+        }
+        if (args[1] == "status") {
+            success = session.print_dbc_status(std::cout, error);
+        } else if (args[1] == "messages") {
+            success = session.print_dbc_messages(std::cout, error);
+        } else {
+            success = session.print_dbc_variable(std::cout, args[2], error);
+        }
+        if (!success) {
+            std::cerr << "Error: " << error << '\n';
+        }
         return true;
     }
     if (args[0] == "history") {
@@ -277,7 +300,8 @@ bool execute_line(canpp::core::Session& session,
         std::size_t offset = 0;
         auto mode = canpp::core::PrintMode::full;
         bool explicit_mode = false;
-        std::string variable_name;
+        std::vector<std::string> variable_names;
+        std::size_t variable_range_start = 0;
         bool variable_signal = false;
         if (args.size() > 1U) {
             if (args[1] == "message") {
@@ -288,19 +312,37 @@ bool execute_line(canpp::core::Session& session,
                 mode = canpp::core::PrintMode::timestamp;
             } else if (args[1] == "variable" || args[1] == "variables") {
                 mode = canpp::core::PrintMode::variable;
+                variable_signal = true;
                 if (args.size() < 3U || parse_number(args[2], limit, 10)) {
-                    std::cerr << "Usage: print variable <SignalName> [limit] [offset]\n";
+                    std::cerr << "Usage: print variable <SignalName> [& <SignalName> ...] [limit] [offset]\n";
                     return true;
                 }
-                variable_signal = true;
-                variable_name = args[2];
+                std::size_t argument = 2U;
+                bool expect_signal = true;
+                while (argument < args.size() && expect_signal) {
+                    if (args[argument] == "&") {
+                        std::cerr << "Malformed variable list: expected a signal name after '&'\n";
+                        return true;
+                    }
+                    variable_names.push_back(args[argument++]);
+                    expect_signal = false;
+                    if (argument < args.size() && args[argument] == "&") {
+                        ++argument;
+                        expect_signal = true;
+                    }
+                }
+                if (expect_signal) {
+                    std::cerr << "Malformed variable list: expected a signal name after '&'\n";
+                    return true;
+                }
+                variable_range_start = argument;
             } else if (!parse_number(args[1], limit, 10)) {
                 std::cerr << "Invalid print mode\n";
                 return true;
             }
             explicit_mode = mode != canpp::core::PrintMode::full;
         }
-        const auto range_start = variable_signal ? 3U : explicit_mode ? 2U : 1U;
+        const auto range_start = variable_signal ? variable_range_start : explicit_mode ? 2U : 1U;
         if (args.size() > range_start + 2U ||
             (mode != canpp::core::PrintMode::variable && args.size() > 4U)) {
             std::cerr << "Invalid print arguments\n";
@@ -315,7 +357,11 @@ bool execute_line(canpp::core::Session& session,
             return true;
         }
         if (variable_signal) {
-            if (!session.print_variable(std::cout, variable_name, limit, offset, error)) {
+            if (variable_names.size() == 1U) {
+                if (!session.print_variable(std::cout, variable_names.front(), limit, offset, error)) {
+                    std::cerr << "Error: " << error << '\n';
+                }
+            } else if (!session.print_variables(std::cout, variable_names, limit, offset, error)) {
                 std::cerr << "Error: " << error << '\n';
             }
         } else {
@@ -391,7 +437,7 @@ bool execute_line(canpp::core::Session& session,
 #ifdef CANPP_TRACE_CLI_HAS_READLINE
 
 const std::vector<std::string> top_level_commands{
-    "import", "open", "load", "gui", "status", "reset", "history", "filter", "print", "save", "exit", "quit", "help"};
+    "import", "open", "load", "dbc", "gui", "status", "reset", "history", "filter", "print", "save", "exit", "quit", "help"};
 
 canpp::core::Session* completion_session = nullptr;
 std::vector<std::string> completion_values;
@@ -424,6 +470,13 @@ std::vector<std::string> completion_candidates(const std::string& line,
     if (completed.size() == 1U && completed[0] == "load") {
         return {"dbc"};
     }
+    if (completed.size() == 1U && completed[0] == "dbc") {
+        return {"status", "messages", "variable"};
+    }
+    if (completed.size() == 2U && completed[0] == "dbc" && completed[1] == "variable" &&
+        completion_session != nullptr) {
+        return completion_session->dbc_signal_names();
+    }
     if (completed.size() == 1U && completed[0] == "import") {
         return {"asc"};
     }
@@ -442,9 +495,14 @@ std::vector<std::string> completion_candidates(const std::string& line,
     if (completed.size() == 2U && completed[0] == "print" && completed[1] == "filter") {
         return {"signal.", "message.", "record.", "timestamp_ns", "time"};
     }
-    if (completed.size() == 2U && completed[0] == "print" &&
+    if (completed.size() >= 2U && completed[0] == "print" &&
         (completed[1] == "variable" || completed[1] == "variables") && completion_session != nullptr) {
-        return completion_session->dbc_signal_names();
+        if (completed.size() == 2U || completed.back() == "&") {
+            return completion_session->dbc_signal_names();
+        }
+        if (completed.size() >= 3U && !current_word_is_partial && completed.back() != "&") {
+            return {"&"};
+        }
     }
     if (completed.size() == 2U && completed[0] == "filter") {
         if (completed[1] == "range") {

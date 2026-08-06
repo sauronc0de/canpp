@@ -50,6 +50,11 @@ public:
                         std::size_t limit,
                         std::size_t offset,
                         std::string& error) const;
+    bool print_variables(std::ostream& output,
+                         const std::vector<std::string>& signal_names,
+                         std::size_t limit,
+                         std::size_t offset,
+                         std::string& error) const;
     bool print_index(std::ostream& output,
                      std::size_t first,
                      std::size_t last,
@@ -61,6 +66,11 @@ public:
     void record_history(std::string command);
     void clear_history();
     void status(std::ostream& output) const;
+    bool print_dbc_status(std::ostream& output, std::string& error) const;
+    bool print_dbc_messages(std::ostream& output, std::string& error) const;
+    bool print_dbc_variable(std::ostream& output,
+                            const std::string& signal_name,
+                            std::string& error) const;
 
     [[nodiscard]] bool has_trace() const;
     [[nodiscard]] const std::filesystem::path& trace_path() const noexcept;

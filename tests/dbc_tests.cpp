@@ -33,7 +33,8 @@ int main() {
                "BO_ 2147483904 Extended: 8 ECU\n"
                " SG_ Value : 0|8@1+ (1,0) [0|255] \"\" ECU\n"
                "BO_ 258 Short: 4 ECU\n"
-               " SG_ Outside : 32|1@1+ (1,0) [0|1] \"\" ECU\n";
+               " SG_ Outside : 32|1@1+ (1,0) [0|1] \"\" ECU\n"
+               " SG_ Speed : 0|8@1- (2,-3) [-3|507] \"rpm\" ECU\n";
     }
 
     canpp::protocol::can::DbcDatabase database;
@@ -99,6 +100,31 @@ int main() {
     assert(session.load_dbc(dbc_path, error));
     assert(session.dbc_message_names().size() == 4U);
     assert(!session.dbc_signal_names().empty());
+    std::ostringstream dbc_status;
+    error.clear();
+    assert(session.print_dbc_status(dbc_status, error));
+    assert(dbc_status.str().find("DBC path: " + dbc_path.string()) != std::string::npos);
+    assert(dbc_status.str().find("Message count: 4") != std::string::npos);
+    assert(dbc_status.str().find("Signal count: 12") != std::string::npos);
+    std::ostringstream dbc_messages;
+    error.clear();
+    assert(session.print_dbc_messages(dbc_messages, error));
+    assert(dbc_messages.str().find("Message: Example\n  ID: 0x100\n  Extended: false\n  Payload size: 8\n  Signal count: 8\n") !=
+           std::string::npos);
+    std::ostringstream dbc_variables;
+    error.clear();
+    assert(session.print_dbc_variable(dbc_variables, "Speed", error));
+    const auto dbc_variables_text = dbc_variables.str();
+    assert(std::count(dbc_variables_text.begin(), dbc_variables_text.end(), '\n') > 20);
+    assert(dbc_variables_text.find("Parent message: Example") != std::string::npos);
+    assert(dbc_variables_text.find("Parent message: Short") != std::string::npos);
+    assert(dbc_variables_text.find("Byte order: Intel") != std::string::npos);
+    std::ostringstream dbc_mode;
+    error.clear();
+    assert(session.print_dbc_variable(dbc_mode, "Mode", error));
+    assert(dbc_mode.str().find("VAL_:") != std::string::npos);
+    assert(dbc_mode.str().find("0: \"Off\"") != std::string::npos);
+    assert(dbc_mode.str().find("1: \"On\"") != std::string::npos);
     assert(session.filter_can_name("Example", true, error));
     assert(session.selection_size() == 1U);
     session.reset();
@@ -162,12 +188,33 @@ int main() {
     error.clear();
     assert(session.print_variable(unavailable_signal, "Wide", 20, 0, error));
     assert(unavailable_signal.str() == "Index Timestamp Value\n");
+
+    std::ostringstream multiple_variables;
+    error.clear();
+    assert(session.print_variables(multiple_variables, {"Mode", "Speed", "Wide"}, 20, 0, error));
+    assert(multiple_variables.str() ==
+           "Index Timestamp Mode Speed Wide\n0 0.000000 1.000000 20.000000 N/A\n");
+    std::ostringstream unknown_multiple;
+    error.clear();
+    assert(!session.print_variables(unknown_multiple, {"Speed", "Unknown"}, 20, 0, error));
+    assert(error == "Unknown DBC signal: Unknown");
+    error.clear();
+    assert(!session.print_variables(unknown_multiple, {}, 20, 0, error));
+    assert(error == "At least one DBC signal name is required");
     std::ostringstream unknown_signal;
     error.clear();
     assert(!session.print_variable(unknown_signal, "Unknown", 20, 0, error));
     assert(error == "Unknown DBC signal: Unknown");
     error.clear();
     assert(!legacy_session.print_variable(unknown_signal, "Speed", 20, 0, error));
+    assert(error == "No DBC database is loaded");
+    std::ostringstream unavailable_dbc_status;
+    error.clear();
+    assert(!legacy_session.print_dbc_status(unavailable_dbc_status, error));
+    assert(error == "No DBC database is loaded");
+    std::ostringstream unavailable_dbc_messages;
+    error.clear();
+    assert(!legacy_session.print_dbc_messages(unavailable_dbc_messages, error));
     assert(error == "No DBC database is loaded");
 
     std::ostringstream limited;

@@ -79,6 +79,7 @@ public:
     [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
     [[nodiscard]] std::vector<std::string> message_names() const;
     [[nodiscard]] std::vector<std::string> signal_names() const;
+    [[nodiscard]] const std::vector<DbcMessage>& messages() const noexcept { return messages_; }
     [[nodiscard]] std::vector<SignalDescriptor> signal_catalog() const;
     [[nodiscard]] bool empty() const noexcept { return messages_.empty(); }
 

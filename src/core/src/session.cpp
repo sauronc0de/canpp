@@ -359,6 +359,67 @@ bool Session::print_variable(std::ostream& output,
     return true;
 }
 
+bool Session::print_variables(std::ostream& output,
+                              const std::vector<std::string>& signal_names,
+                              std::size_t limit,
+                              std::size_t offset,
+                              std::string& error) const {
+    if (signal_names.empty()) {
+        error = "At least one DBC signal name is required";
+        return false;
+    }
+    if (dbc_.empty()) {
+        error = "No DBC database is loaded";
+        return false;
+    }
+    const auto available_names = dbc_.signal_names();
+    for (const auto& signal_name : signal_names) {
+        if (signal_name.empty()) {
+            error = "A DBC signal name is required";
+            return false;
+        }
+        if (std::find(available_names.begin(), available_names.end(), signal_name) == available_names.end()) {
+            error = "Unknown DBC signal: " + signal_name;
+            return false;
+        }
+    }
+
+    output << "Index Timestamp";
+    for (const auto& signal_name : signal_names) {
+        output << ' ' << signal_name;
+    }
+    output << '\n';
+    const auto end = offset < selection_.size()
+                         ? offset + std::min(limit, selection_.size() - offset)
+                         : offset;
+    for (std::size_t row = offset; row < end; ++row) {
+        const auto record = reader_.read(selection_[row]);
+        if (!record || record->protocol != trace::ProtocolId::can) {
+            continue;
+        }
+        const auto frame = protocol::can::decode(*record);
+        output << row << ' ' << std::fixed << std::setprecision(6)
+               << static_cast<double>(record->timestamp_ns) / 1'000'000'000.0;
+        std::vector<protocol::can::DbcSignalValue> values;
+        if (frame) {
+            values = dbc_.decode(frame->can_id, frame->extended, frame->data);
+        }
+        for (const auto& signal_name : signal_names) {
+            const auto value = std::find_if(values.begin(), values.end(), [&signal_name](const auto& item) {
+                return item.name == signal_name;
+            });
+            output << ' ';
+            if (value == values.end()) {
+                output << "N/A";
+            } else {
+                output << value->value;
+            }
+        }
+        output << '\n';
+    }
+    return true;
+}
+
 bool Session::print_index(std::ostream& output,
                           std::size_t first,
                           std::size_t last,
@@ -441,6 +502,108 @@ void Session::status(std::ostream& output) const {
     if (!dbc_.empty()) {
         output << "DBC: " << dbc_.path() << '\n';
     }
+}
+
+bool Session::print_dbc_status(std::ostream& output, std::string& error) const {
+    if (dbc_.empty()) {
+        error = "No DBC database is loaded";
+        return false;
+    }
+    std::size_t signal_count = 0;
+    for (const auto& message : dbc_.messages()) {
+        signal_count += message.signals.size();
+    }
+    output << "DBC path: " << dbc_.path().string() << '\n'
+           << "Message count: " << dbc_.messages().size() << '\n'
+           << "Signal count: " << signal_count << '\n';
+    return true;
+}
+
+bool Session::print_dbc_messages(std::ostream& output, std::string& error) const {
+    if (dbc_.empty()) {
+        error = "No DBC database is loaded";
+        return false;
+    }
+    for (const auto& message : dbc_.messages()) {
+        output << "Message: " << message.name << '\n'
+               << "  ID: 0x" << std::hex << std::uppercase << message.id << std::dec << '\n'
+               << "  Extended: " << (message.extended ? "true" : "false") << '\n'
+               << "  Payload size: " << static_cast<unsigned>(message.size) << '\n'
+               << "  Signal count: " << message.signals.size() << '\n';
+    }
+    return true;
+}
+
+bool Session::print_dbc_variable(std::ostream& output,
+                                 const std::string& signal_name,
+                                 std::string& error) const {
+    if (dbc_.empty()) {
+        error = "No DBC database is loaded";
+        return false;
+    }
+    if (signal_name.empty()) {
+        error = "A DBC signal name is required";
+        return false;
+    }
+
+    bool found = false;
+    for (const auto& message : dbc_.messages()) {
+        for (const auto& signal : message.signals) {
+            if (signal.name != signal_name) {
+                continue;
+            }
+            found = true;
+            output << "Signal: " << signal.name << '\n'
+                   << "  Parent message: " << message.name << '\n'
+                   << "  CAN ID: 0x" << std::hex << std::uppercase << message.id << std::dec << '\n'
+                   << "  Extended: " << (message.extended ? "true" : "false") << '\n'
+                   << "  Parent payload size: " << static_cast<unsigned>(message.size) << '\n'
+                   << "  Start bit: " << signal.start_bit << '\n'
+                   << "  Bit length: " << signal.bit_length << '\n'
+                   << "  Byte order: "
+                   << (signal.byte_order == protocol::can::DbcByteOrder::intel ? "Intel" : "Motorola") << '\n'
+                   << "  Signed: " << (signal.is_signed ? "true" : "false") << '\n'
+                   << "  Factor: " << signal.factor << '\n'
+                   << "  Offset: " << signal.offset << '\n'
+                   << "  Minimum: " << signal.minimum << '\n'
+                   << "  Maximum: " << signal.maximum << '\n'
+                   << "  Units: " << (signal.unit.empty() ? "(none)" : signal.unit) << '\n';
+            if (signal.multiplexer) {
+                output << "  Multiplexing: multiplexer\n";
+            } else if (signal.multiplexer_value) {
+                output << "  Multiplexing: multiplexed (value " << *signal.multiplexer_value << ")\n";
+            } else {
+                output << "  Multiplexing: none\n";
+            }
+            if (signal.value_descriptions.empty()) {
+                output << "  VAL_: (none)\n";
+            } else {
+                std::vector<std::pair<std::uint64_t, std::string>> values(signal.value_descriptions.begin(),
+                                                                            signal.value_descriptions.end());
+                std::sort(values.begin(), values.end(), [&signal](const auto& left, const auto& right) {
+                    if (signal.is_signed) {
+                        return static_cast<std::int64_t>(left.first) < static_cast<std::int64_t>(right.first);
+                    }
+                    return left.first < right.first;
+                });
+                output << "  VAL_:" << '\n';
+                for (const auto& [value, description] : values) {
+                    output << "    ";
+                    if (signal.is_signed) {
+                        output << static_cast<std::int64_t>(value);
+                    } else {
+                        output << value;
+                    }
+                    output << ": \"" << description << "\"\n";
+                }
+            }
+        }
+    }
+    if (!found) {
+        error = "Unknown DBC signal: " + signal_name;
+        return false;
+    }
+    return true;
 }
 
 bool Session::has_trace() const { return reader_.is_open(); }

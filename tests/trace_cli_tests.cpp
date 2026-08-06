@@ -48,6 +48,7 @@ int main(int argc, char** argv) {
     {
         std::ofstream input(input_path);
         input << "print unknown\nprint 1 invalid\nprint variable\nprint variable Speed\n"
+              << "print variable Speed &\nprint variable & Speed\nprint variable Speed & & Mode\n"
               << "open " << trace_path.string() << "\n"
               << "print filter message.name == \"legacy-name\"\n"
               << "history\nprint index 0\nprint index invalid\nprint index 9\nreset\nhistory\nquit\n";
@@ -61,6 +62,7 @@ int main(int argc, char** argv) {
     assert(text.find("Invalid print mode") != std::string::npos);
     assert(text.find("Invalid print range") != std::string::npos);
     assert(text.find("Error: No DBC database is loaded") != std::string::npos);
+    assert(text.find("Malformed variable list: expected a signal name after '&'") != std::string::npos);
     assert(text.find("0.000000 CAN 0 Tx 100 legacy-name") != std::string::npos);
     assert(text.find("1 open ") != std::string::npos);
     assert(text.find("2 reset") != std::string::npos);
