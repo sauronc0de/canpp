@@ -1,21 +1,32 @@
 #include "canpp/core/session.hpp"
 #include "canpp/application/command_executor.hpp"
 #include "canpp/application/command_parser.hpp"
+#include "presentation.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <charconv>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #ifdef _WIN32
+#include <io.h>
 #include <process.h>
+#include <windows.h>
+#else
+#include <unistd.h>
 #endif
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -91,37 +102,216 @@ bool launch_gui(const canpp::core::Session&, const std::filesystem::path&, std::
 }
 #endif
 
+bool is_asc_import(const std::vector<std::string>& tokens) noexcept {
+    return tokens.size() == 4U && tokens[0] == "import" && tokens[1] == "asc";
+}
+
+class LoadingSpinner {
+public:
+    LoadingSpinner(bool enabled, bool ansi_enabled, std::ostream& output)
+        : enabled_(enabled), ansi_enabled_(ansi_enabled), output_(output) {}
+
+    LoadingSpinner(const LoadingSpinner&) = delete;
+    LoadingSpinner& operator=(const LoadingSpinner&) = delete;
+
+    ~LoadingSpinner() { stop(); }
+
+    void start() {
+        if (!enabled_) return;
+#ifdef _WIN32
+        terminal_mode_ = std::make_unique<TerminalMode>();
+        ansi_enabled_ = ansi_enabled_ && terminal_mode_->enabled();
+#endif
+        if (ansi_enabled_) {
+            output_ << "\r\033[2K";
+        } else {
+            output_ << '\r' << std::string(32U, ' ') << '\r';
+        }
+        output_ << std::flush;
+        running_.store(true);
+        render(0U);
+        try {
+            worker_ = std::thread([this] {
+                std::size_t frame = 1U;
+                while (running_.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    if (running_.load()) render(frame++ % frames.size());
+                }
+            });
+        } catch (...) {
+            running_.store(false);
+            clear();
+            return;
+        }
+        started_ = true;
+    }
+
+    void stop() noexcept {
+        if (!enabled_ || (!started_ && !worker_.joinable())) return;
+        running_.store(false);
+        if (worker_.joinable()) worker_.join();
+        clear();
+        started_ = false;
+    }
+
+    [[nodiscard]] bool started() const noexcept { return started_; }
+
+private:
+#ifdef _WIN32
+    class TerminalMode {
+    public:
+        TerminalMode() {
+            handle_ = GetStdHandle(STD_ERROR_HANDLE);
+            if (handle_ == nullptr || handle_ == INVALID_HANDLE_VALUE ||
+                GetConsoleMode(handle_, &previous_mode_) == 0) {
+                return;
+            }
+            enabled_ = SetConsoleMode(handle_, previous_mode_ | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
+        }
+
+        ~TerminalMode() {
+            if (enabled_) (void)SetConsoleMode(handle_, previous_mode_);
+        }
+
+        [[nodiscard]] bool enabled() const noexcept { return enabled_; }
+
+    private:
+        HANDLE handle_ = INVALID_HANDLE_VALUE;
+        DWORD previous_mode_ = 0;
+        bool enabled_ = false;
+    };
+#endif
+
+    static constexpr std::array<std::string_view, 12> frames{
+        "⠁", "⠃", "⠇", "⠧", "⠷", "⠿", "⠷", "⠯", "⠮", "⠟", "⠻", "⠽"};
+
+    void render(std::size_t frame) {
+        if (ansi_enabled_) {
+            output_ << "\033[?25l" << '\r' << frames[frame];
+        } else {
+            constexpr std::string_view fallback_frames{"|/-\\"};
+            output_ << '\r' << fallback_frames[frame % fallback_frames.size()];
+        }
+        output_ << " Importing ASC trace..." << std::flush;
+    }
+
+    void clear() noexcept {
+        try {
+            if (ansi_enabled_) {
+                output_ << "\r\033[2K\033[?25h";
+            } else {
+                output_ << '\r' << std::string(32U, ' ') << '\r';
+            }
+            output_ << std::flush;
+        } catch (...) {
+            // Diagnostics are best-effort during cleanup.
+        }
+    }
+
+    const bool enabled_;
+    bool ansi_enabled_;
+    std::ostream& output_;
+    std::atomic<bool> running_{false};
+    std::thread worker_;
+    bool started_ = false;
+#ifdef _WIN32
+    std::unique_ptr<TerminalMode> terminal_mode_;
+#endif
+};
+
 bool execute_line(canpp::core::Session& session,
                   const std::string& line,
                   const std::filesystem::path& cli_path,
+                  const canpp::cli::Presentation& presentation,
                   bool include_status = true,
                   std::ostream& output = std::cout,
                   std::ostream& diagnostics = std::cerr,
-                  bool* failed = nullptr) {
+                  bool* failed = nullptr,
+                  bool allow_animation = true,
+                  bool* animated = nullptr) {
     if (failed != nullptr) *failed = false;
+    if (animated != nullptr) *animated = false;
     canpp::application::CommandParser parser;
     const auto parsed = parser.parse_line(line);
     if (!parsed) {
-        diagnostics << "Error: " << parsed.error().message << '\n';
+        if (presentation.uses_json()) {
+            canpp::application::CommandResult result;
+            result.success = false;
+            result.diagnostics.push_back(parsed.error());
+            presentation.result(output, diagnostics, "", result);
+        } else {
+            presentation.parse_error(diagnostics, parsed.error());
+        }
         if (failed != nullptr) *failed = true;
         return true;
     }
     if (parsed->tokens.size() == 1U && parsed->tokens.front() == "gui") {
         std::string error;
         if (!launch_gui(session, cli_path, error)) {
-            diagnostics << "Error: " << error << '\n';
+            const canpp::application::Diagnostic diagnostic{
+                canpp::application::DiagnosticCode::io_error, error, {1U, 1U}};
+            if (presentation.uses_json()) {
+                canpp::application::CommandResult result;
+                result.success = false;
+                result.diagnostics.push_back(diagnostic);
+                presentation.result(output, diagnostics, "gui", result);
+            } else {
+                presentation.diagnostic(diagnostics, diagnostic);
+            }
             if (failed != nullptr) *failed = true;
         } else if (include_status) {
-            session.status(output);
+            canpp::application::CommandResult result;
+            std::ostringstream status;
+            session.status(status);
+            result.output = status.str();
+            presentation.result(output, diagnostics, "gui", result);
         }
         return true;
     }
     canpp::application::CommandExecutor executor(session);
-    const auto result = executor.execute(*parsed, {.include_status = include_status});
-    output << result.output;
-    for (const auto& diagnostic : result.diagnostics) {
-        diagnostics << "Error: " << diagnostic.message << '\n';
+    LoadingSpinner spinner(allow_animation && presentation.interactive() && is_asc_import(parsed->tokens),
+                           presentation.ansi(), diagnostics);
+    spinner.start();
+    if (animated != nullptr) *animated = spinner.started();
+    auto result = executor.execute(*parsed, {.include_status = include_status});
+    spinner.stop();
+    if (presentation.interactive() && parsed->tokens.front() == "help" && result.success) {
+        result.output =
+            "Resources\n"
+            "  import asc <input.asc> <output.commtrace>\n"
+            "  open <file.commtrace>\n"
+            "  load dbc <file.dbc>\n"
+            "  save <output.commtrace>\n\n"
+            "Inspection\n"
+            "  status | reset | history\n"
+            "  dbc status | dbc messages [list] [grep <pattern>] [limit N] [offset N]\n"
+            "  dbc variables [list] [grep <pattern>] [limit N] [offset N]\n"
+            "  dbc variable <signal-name> [grep <pattern>] [limit N] [offset N]\n"
+            "  print [list] [limit] [offset] [grep <pattern>]\n"
+            "  print message[s]|id|timestamp [list] [limit] [offset] [grep <pattern>]\n"
+            "  print variable[s] [<SignalName> [& <SignalName> ...]] [list] [limit] [offset] [grep <pattern>]\n"
+            "  print index <index> [<last-index>] | print filter <expression>\n\n"
+            "Filtering\n"
+            "  filter protocol can [original] | filter direction rx|tx [original]\n"
+            "  filter payload <offset> <hex-byte> [original]\n"
+            "  filter can id|name|signal <value> [original]\n"
+            "  filter <expression> [original]\n\n"
+            "Other\n"
+            "  gui | help | exit | quit\n";
     }
+    if (presentation.interactive() && result.state_changed && !presentation.uses_json()) {
+        const std::string marker = presentation.ansi() ? "✓ " : "+ ";
+        std::string summary = marker + parsed->tokens.front() + " complete";
+        if (parsed->tokens.front() == "open" && parsed->tokens.size() > 1U) {
+            summary = marker + "Opened trace: " + parsed->tokens[1];
+        } else if (parsed->tokens.front() == "load" && parsed->tokens.size() > 2U) {
+            summary = marker + "Loaded DBC: " + parsed->tokens[2];
+        } else if (parsed->tokens.front() == "import") {
+            summary = marker + "Imported ASC trace";
+        }
+        output << presentation.style(summary + '\n', "\033[32m");
+    }
+    presentation.result(output, diagnostics, parsed->tokens.front(), result);
     if (failed != nullptr) *failed = !result.success;
     return !result.exit_requested;
 }
@@ -389,7 +579,8 @@ void cancel_readline_input() {
     rl_redisplay();
 }
 
-void run_readline(canpp::core::Session& session, const std::filesystem::path& cli_path) {
+void run_readline(canpp::core::Session& session, const std::filesystem::path& cli_path,
+                  const canpp::cli::Presentation& presentation) {
     int signal_read_fd = -1;
     int signal_write_fd = -1;
     struct sigaction previous_action{};
@@ -402,7 +593,8 @@ void run_readline(canpp::core::Session& session, const std::filesystem::path& cl
     readline_callback_line.clear();
     readline_callback_line_ready = false;
     readline_callback_eof = false;
-    rl_callback_handler_install("canpp> ", readline_line_handler);
+    std::string prompt = presentation.prompt(session);
+    rl_callback_handler_install(prompt.c_str(), readline_line_handler);
 
     bool stop = false;
     bool interrupted = false;
@@ -443,8 +635,18 @@ void run_readline(canpp::core::Session& session, const std::filesystem::path& cl
             if (!line.empty()) {
                 add_history(line.c_str());
             }
-            if (!execute_line(session, line, cli_path)) {
+            bool animated = false;
+            if (!execute_line(session, line, cli_path, presentation, true, std::cout, std::cerr, nullptr, true, &animated)) {
                 stop = true;
+            }
+            if (animated) {
+                rl_on_new_line_with_prompt();
+                rl_forced_update_display();
+            }
+            if (!stop) {
+                rl_callback_handler_remove();
+                prompt = presentation.prompt(session);
+                rl_callback_handler_install(prompt.c_str(), readline_line_handler);
             }
         }
     }
@@ -467,9 +669,21 @@ int main(int argc, char** argv) {
     std::filesystem::path script;
     bool stdin_mode = false;
     bool batch = false;
+    canpp::cli::OutputFormat format = canpp::cli::OutputFormat::plain;
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index] != nullptr ? argv[index] : "";
-        if (argument == "--command") {
+        if (argument == "--format") {
+            if (++index >= argc || argv[index] == nullptr ||
+                !canpp::cli::parse_output_format(argv[index], format)) {
+                std::cerr << "--format requires plain, table, or json\n";
+                return 2;
+            }
+        } else if (argument.rfind("--format=", 0U) == 0U) {
+            if (!canpp::cli::parse_output_format(argument.substr(9), format)) {
+                std::cerr << "--format requires plain, table, or json\n";
+                return 2;
+            }
+        } else if (argument == "--command") {
             if (++index >= argc || argv[index] == nullptr) {
                 std::cerr << "--command requires a command line\n";
                 return 2;
@@ -492,6 +706,9 @@ int main(int argc, char** argv) {
         }
     }
 
+    const auto terminal = canpp::cli::detect_terminal();
+    const canpp::cli::Presentation presentation(format, !batch, terminal);
+
     if (batch) {
         if ((!commands.empty() && (!script.empty() || stdin_mode)) ||
             (!script.empty() && stdin_mode)) {
@@ -513,35 +730,57 @@ int main(int argc, char** argv) {
         }
         for (const auto& line : lines) {
             bool failed = false;
-            if (!execute_line(session, line, cli_path, false, std::cout, std::cerr, &failed)) return 0;
+            if (!execute_line(session, line, cli_path, presentation, false, std::cout, std::cerr, &failed, false)) return 0;
             if (failed) return 1;
         }
         return 0;
     }
 
-    std::cout << "Canpp communication trace CLI - type 'help'\n";
+    if (!presentation.uses_json()) {
+        std::cout << presentation.style("Canpp communication trace CLI - type 'help'\n", "\033[1;36m");
+    }
 #ifdef CANPP_TRACE_CLI_HAS_READLINE
     completion_session = &session;
     rl_attempted_completion_function = complete_line;
     configure_completion();
     initialize_history();
 #ifndef _WIN32
-    run_readline(session, cli_path);
+    if (presentation.terminal_interactive()) {
+        run_readline(session, cli_path, presentation);
+    } else {
+        for (std::string line; (presentation.uses_json() || (std::cout << presentation.prompt(session))) &&
+                               std::getline(std::cin, line);) {
+            if (!execute_line(session, line, cli_path, presentation)) break;
+        }
+    }
 #else
-    for (;;) {
-        std::cout.flush();
-        char* raw_line = readline("canpp> ");
-        if (raw_line == nullptr) break;
-        std::string line(raw_line);
-        std::free(raw_line);
-        if (!line.empty()) add_history(line.c_str());
-        if (!execute_line(session, line, cli_path)) break;
+    if (presentation.terminal_interactive()) {
+        for (;;) {
+            std::cout.flush();
+            const std::string prompt = presentation.prompt(session);
+            char* raw_line = readline(prompt.c_str());
+            if (raw_line == nullptr) break;
+            std::string line(raw_line);
+            std::free(raw_line);
+            if (!line.empty()) add_history(line.c_str());
+            bool animated = false;
+            if (!execute_line(session, line, cli_path, presentation, true, std::cout, std::cerr, nullptr, true, &animated)) break;
+            if (animated) {
+                rl_on_new_line_with_prompt();
+                rl_forced_update_display();
+            }
+        }
+    } else {
+        for (std::string line; (presentation.uses_json() || (std::cout << presentation.prompt(session))) &&
+                               std::getline(std::cin, line);) {
+            if (!execute_line(session, line, cli_path, presentation)) break;
+        }
     }
 #endif
     save_history();
 #else
-    for (std::string line; std::cout << "canpp> " && std::getline(std::cin, line);) {
-        if (!execute_line(session, line, cli_path)) break;
+    for (std::string line; std::cout << presentation.prompt(session) && std::getline(std::cin, line);) {
+        if (!execute_line(session, line, cli_path, presentation)) break;
     }
 #endif
     return 0;

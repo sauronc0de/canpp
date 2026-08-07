@@ -35,6 +35,7 @@ int main(int argc, char** argv) {
     const auto input_path = directory / "canpp_trace_cli_test_input.txt";
     const auto output_path = directory / "canpp_trace_cli_test_output.txt";
     const auto batch_output_path = directory / "canpp_trace_cli_test_batch_output.txt";
+    const auto json_output_path = directory / "canpp_trace_cli_test_json_output.txt";
     const auto script_path = directory / "canpp_trace_cli_test_script.canpp";
     const auto trace_path = directory / "canpp_trace_cli_test.commtrace";
     const auto dbc_path = directory / "canpp_trace_cli_test.dbc";
@@ -120,6 +121,25 @@ int main(int argc, char** argv) {
     assert(batch_text.find("Canpp communication trace CLI") == std::string::npos);
     assert(batch_text.find("canpp> ") == std::string::npos);
     assert(batch_text.find("Example") != std::string::npos);
+    assert(batch_text.find('\033') == std::string::npos);
+
+    const auto json_command = executable + " --format json --command " + shell_quote("status") +
+                               " --command " + shell_quote("print unknown") + " > " +
+                               shell_quote(json_output_path) + " 2>&1";
+    assert(std::system(json_command.c_str()) != 0);
+    std::ifstream json_output(json_output_path);
+    const std::string json_text{std::istreambuf_iterator<char>(json_output), std::istreambuf_iterator<char>()};
+    assert(json_text.find("{\"success\":true") != std::string::npos);
+    assert(json_text.find("\"output\":\"No communication trace open\\n\"") != std::string::npos);
+    assert(json_text.find("\"diagnostics\":[{\"code\":\"invalid_argument\"") != std::string::npos);
+    assert(json_text.find('\033') == std::string::npos);
+
+    const auto table_command = executable + " --format table --command " + shell_quote("status") +
+                                " > " + shell_quote(json_output_path) + " 2>&1";
+    assert(std::system(table_command.c_str()) == 0);
+    std::ifstream table_output(json_output_path);
+    const std::string table_text{std::istreambuf_iterator<char>(table_output), std::istreambuf_iterator<char>()};
+    assert(table_text.find("+-") != std::string::npos);
 
     const auto script_command = executable + " --script " + shell_quote(script_path) +
                                 " > " + shell_quote(batch_output_path) + " 2>&1";
@@ -140,5 +160,6 @@ int main(int argc, char** argv) {
     std::filesystem::remove(trace_path);
     std::filesystem::remove(dbc_path);
     std::filesystem::remove(batch_output_path);
+    std::filesystem::remove(json_output_path);
     std::filesystem::remove(script_path);
 }

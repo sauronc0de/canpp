@@ -1,4 +1,4 @@
-add_executable(Canpp main.cpp)
+add_executable(Canpp main.cpp presentation.cpp)
 # Keep the former target name available to downstream CMake consumers.
 add_executable(canpp_trace_cli ALIAS Canpp)
 target_link_libraries(Canpp
